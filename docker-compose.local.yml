@@ -1,0 +1,20 @@
+services:
+  thumbnail-extractor:
+    build: .
+    container_name: thumbnail-text-extractor-local
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-files}
+      - THUMBNAIL_BUCKET=${THUMBNAIL_BUCKET:-thumbnails}
+      - THUMBNAIL_WIDTH=${THUMBNAIL_WIDTH:-400}
+      - THUMBNAIL_HEIGHT=${THUMBNAIL_HEIGHT:-300}
+      - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-51200}
+      - POLL_INTERVAL=${POLL_INTERVAL:-5}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./src:/app/src:ro
+
