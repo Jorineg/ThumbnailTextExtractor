@@ -117,6 +117,12 @@ class App:
         
         try:
             while self.running:
+                # Check storage availability before processing
+                if not self.storage.is_available():
+                    logger.warning("Storage unavailable, waiting...")
+                    time.sleep(settings.POLL_INTERVAL)
+                    continue
+
                 # Fetch pending items
                 items = self.queue.fetch_pending(limit=5)
 

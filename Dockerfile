@@ -1,12 +1,9 @@
-FROM python:3.11-slim
+FROM jorineg/ibhelm-base:latest
 
-# Install poppler for pdf2image
-RUN apt-get update && apt-get install -y \
+# Install poppler for pdf2image (service-specific)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -16,6 +13,6 @@ COPY src/ ./src/
 RUN mkdir -p /app/data/temp /app/logs
 
 ENV PYTHONUNBUFFERED=1
+ENV SERVICE_NAME=thumbnailtextextractor
 
 CMD ["python", "-m", "src.app"]
-

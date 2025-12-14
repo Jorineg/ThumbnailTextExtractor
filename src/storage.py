@@ -59,6 +59,15 @@ class StorageClient:
             logger.warning(f"Failed to delete {bucket}/{path}: {e}")
             return False
 
+    def is_available(self) -> bool:
+        """Check if storage service is reachable."""
+        try:
+            url = f"{self.base_url}/bucket/{settings.STORAGE_BUCKET}"
+            response = self._client.get(url, headers=self.headers, timeout=5.0)
+            return response.status_code == 200
+        except Exception:
+            return False
+
     def ensure_bucket_exists(self, bucket: str) -> bool:
         """Ensure bucket exists, create if not."""
         try:
