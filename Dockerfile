@@ -5,7 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libxcb-cursor0 \
     libxcb-xinerama0 \
-    libgl1-mesa-glx \
+    libgl1 \
+    libgl1-mesa-dri \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/lib/x86_64-linux-gnu/libxcb-util.so.1 /usr/lib/x86_64-linux-gnu/libxcb-util.so.0 || true
 
