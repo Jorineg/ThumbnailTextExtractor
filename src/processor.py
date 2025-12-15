@@ -5,8 +5,11 @@ import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 from PIL import Image
+import pillow_heif  # Registers HEIC/HEIF support with Pillow
 import fitz  # PyMuPDF
 from pdf2image import convert_from_path
+
+pillow_heif.register_heif_opener()  # Enable HEIC support in Pillow
 
 from src import settings
 from src.logging_conf import logger

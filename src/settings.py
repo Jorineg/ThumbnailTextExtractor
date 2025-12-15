@@ -35,7 +35,7 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
 # Supported formats
-THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
 # DWG support disabled - LibreDWG output quality insufficient
 # THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}
