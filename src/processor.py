@@ -1,5 +1,6 @@
 """File processing: thumbnail generation and text extraction."""
-import io
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Optional, Tuple
@@ -24,12 +25,16 @@ def is_pdf(filename: str) -> bool:
     return get_file_extension(filename) in settings.THUMBNAIL_PDF_EXTENSIONS
 
 
+def is_dwg(filename: str) -> bool:
+    return get_file_extension(filename) in settings.THUMBNAIL_DWG_EXTENSIONS
+
+
 def is_text_file(filename: str) -> bool:
     return get_file_extension(filename) in settings.TEXT_EXTRACT_EXTENSIONS
 
 
 def can_generate_thumbnail(filename: str) -> bool:
-    return is_image(filename) or is_pdf(filename)
+    return is_image(filename) or is_pdf(filename) or is_dwg(filename)
 
 
 def can_extract_text(filename: str) -> bool:
@@ -55,13 +60,83 @@ def create_cover_thumbnail(img: Image.Image, width: int, height: int) -> Image.I
     return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def generate_thumbnail(source_path: Path, dest_path: Path) -> bool:
-    """Generate thumbnail for image or PDF."""
+def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
+    """Convert DWG/DXF to PDF using ODA File Converter."""
+    try:
+        # ODA works on folders, so copy file to isolated temp folder
+        job_id = uuid.uuid4()
+        input_dir = temp_dir / f"dwg_in_{job_id}"
+        output_dir = temp_dir / f"dwg_out_{job_id}"
+        input_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(exist_ok=True)
+        
+        # Copy source file to input dir
+        temp_dwg = input_dir / source_path.name
+        shutil.copy2(source_path, temp_dwg)
+        
+        # ODA File Converter args: input_folder output_folder output_version output_type recurse audit
+        result = subprocess.run(
+            [
+                settings.ODA_CONVERTER_PATH,
+                str(input_dir),
+                str(output_dir),
+                "ACAD2018",  # Output version
+                "PDF",       # Output format
+                "0",         # Don't recurse
+                "0",         # Don't audit
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        # Cleanup input
+        temp_dwg.unlink(missing_ok=True)
+        input_dir.rmdir()
+        
+        # Find generated PDF
+        pdf_name = source_path.stem + ".pdf"
+        pdf_path = output_dir / pdf_name
+        
+        if pdf_path.exists():
+            return pdf_path
+        
+        # Log what went wrong
+        logger.warning(f"DWG conversion produced no PDF for {source_path.name}")
+        if result.stderr:
+            logger.warning(f"ODA stderr: {result.stderr[:500]}")
+        output_dir.rmdir()
+        return None
+        
+    except subprocess.TimeoutExpired:
+        logger.error(f"DWG conversion timed out for {source_path.name}")
+        return None
+    except Exception as e:
+        logger.error(f"DWG conversion failed for {source_path.name}: {e}")
+        return None
+
+
+def generate_thumbnail(source_path: Path, dest_path: Path, temp_dir: Optional[Path] = None) -> bool:
+    """Generate thumbnail for image, PDF, or DWG."""
     try:
         ext = get_file_extension(source_path.name)
         width, height = settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT
 
-        if ext in settings.THUMBNAIL_PDF_EXTENSIONS:
+        if ext in settings.THUMBNAIL_DWG_EXTENSIONS:
+            # DWG/DXF: Convert to PDF first, then to image
+            if temp_dir is None:
+                temp_dir = settings.TEMP_DIR
+            pdf_path = convert_dwg_to_pdf(source_path, temp_dir)
+            if not pdf_path:
+                return False
+            images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=150)
+            # Cleanup temp PDF
+            pdf_path.unlink(missing_ok=True)
+            pdf_path.parent.rmdir()
+            if not images:
+                return False
+            img = images[0]
+        elif ext in settings.THUMBNAIL_PDF_EXTENSIONS:
             # PDF: Convert first page to image
             images = convert_from_path(str(source_path), first_page=1, last_page=1, dpi=150)
             if not images:
@@ -142,7 +217,7 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
     if can_generate_thumbnail(source_path.name):
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
-        if generate_thumbnail(source_path, thumb_path):
+        if generate_thumbnail(source_path, thumb_path, temp_dir):
             thumbnail_path = thumb_path
 
     # Extract text

@@ -37,7 +37,11 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 # Supported formats
 THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
+THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}
 TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".sql", ".py", ".sh", ".bash"}
+
+# ODA File Converter path (AppImage in /usr/local/bin)
+ODA_CONVERTER_PATH = os.getenv("ODA_CONVERTER_PATH", "/usr/local/bin/ODAFileConverter")
 
 
 def validate_config():
