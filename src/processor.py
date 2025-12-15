@@ -63,6 +63,12 @@ def create_cover_thumbnail(img: Image.Image, width: int, height: int) -> Image.I
 def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
     """Convert DWG/DXF to PDF using ODA File Converter."""
     try:
+        # Check if converter exists
+        converter_path = Path(settings.ODA_CONVERTER_PATH)
+        if not converter_path.exists():
+            logger.error(f"ODA File Converter not found at {settings.ODA_CONVERTER_PATH}")
+            return None
+        
         # ODA works on folders, so copy file to isolated temp folder
         job_id = uuid.uuid4()
         input_dir = temp_dir / f"dwg_in_{job_id}"
@@ -73,6 +79,8 @@ def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
         # Copy source file to input dir
         temp_dwg = input_dir / source_path.name
         shutil.copy2(source_path, temp_dwg)
+        
+        logger.info(f"Converting DWG: {source_path.name} using ODA File Converter")
         
         # ODA File Converter args: input_folder output_folder output_version output_type recurse audit
         result = subprocess.run(
@@ -90,6 +98,12 @@ def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
             timeout=120
         )
         
+        logger.debug(f"ODA return code: {result.returncode}")
+        if result.stdout:
+            logger.debug(f"ODA stdout: {result.stdout[:500]}")
+        if result.stderr:
+            logger.debug(f"ODA stderr: {result.stderr[:500]}")
+        
         # Cleanup input
         temp_dwg.unlink(missing_ok=True)
         input_dir.rmdir()
@@ -99,20 +113,35 @@ def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
         pdf_path = output_dir / pdf_name
         
         if pdf_path.exists():
+            logger.info(f"DWG conversion successful: {source_path.name} -> PDF")
             return pdf_path
         
+        # Check if any PDF was created (maybe different name)
+        pdfs = list(output_dir.glob("*.pdf"))
+        if pdfs:
+            logger.info(f"DWG conversion successful (different name): {pdfs[0].name}")
+            return pdfs[0]
+        
         # Log what went wrong
-        logger.warning(f"DWG conversion produced no PDF for {source_path.name}")
+        logger.error(f"DWG conversion produced no PDF for {source_path.name}")
+        logger.error(f"ODA return code: {result.returncode}")
+        if result.stdout:
+            logger.error(f"ODA stdout: {result.stdout}")
         if result.stderr:
-            logger.warning(f"ODA stderr: {result.stderr[:500]}")
-        output_dir.rmdir()
+            logger.error(f"ODA stderr: {result.stderr}")
+        
+        # Cleanup output dir
+        shutil.rmtree(output_dir, ignore_errors=True)
         return None
         
     except subprocess.TimeoutExpired:
         logger.error(f"DWG conversion timed out for {source_path.name}")
         return None
+    except FileNotFoundError as e:
+        logger.error(f"ODA File Converter not found: {e}")
+        return None
     except Exception as e:
-        logger.error(f"DWG conversion failed for {source_path.name}: {e}")
+        logger.error(f"DWG conversion failed for {source_path.name}: {e}", exc_info=True)
         return None
 
 
