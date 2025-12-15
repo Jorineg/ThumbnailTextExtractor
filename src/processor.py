@@ -60,85 +60,65 @@ def create_cover_thumbnail(img: Image.Image, width: int, height: int) -> Image.I
     return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def convert_dwg_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
-    """Convert DWG/DXF to PDF using ODA File Converter."""
+def convert_dwg_to_image(source_path: Path, temp_dir: Path) -> Optional[Path]:
+    """Convert DWG/DXF to PNG using LibreDWG."""
+    job_id = uuid.uuid4()
+    
     try:
-        # Check if converter exists
-        converter_path = Path(settings.ODA_CONVERTER_PATH)
-        if not converter_path.exists():
-            logger.error(f"ODA File Converter not found at {settings.ODA_CONVERTER_PATH}")
-            return None
-        
-        # ODA works on folders, so copy file to isolated temp folder
-        job_id = uuid.uuid4()
-        input_dir = temp_dir / f"dwg_in_{job_id}"
-        output_dir = temp_dir / f"dwg_out_{job_id}"
-        input_dir.mkdir(exist_ok=True)
-        output_dir.mkdir(exist_ok=True)
-        
-        # Copy source file to input dir
-        temp_dwg = input_dir / source_path.name
-        shutil.copy2(source_path, temp_dwg)
-        
-        logger.info(f"Converting DWG: {source_path.name} using ODA File Converter")
-        
-        # ODA File Converter args: input_folder output_folder output_version output_type recurse audit
+        # Method 1: Try dwgbmp to extract embedded thumbnail
+        bmp_path = temp_dir / f"dwg_{job_id}.bmp"
         result = subprocess.run(
-            [
-                settings.ODA_CONVERTER_PATH,
-                str(input_dir),
-                str(output_dir),
-                "ACAD2018",  # Output version
-                "PDF",       # Output format
-                "0",         # Don't recurse
-                "0",         # Don't audit
-            ],
+            ["dwgbmp", "-o", str(bmp_path), str(source_path)],
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=30
         )
         
-        logger.debug(f"ODA return code: {result.returncode}")
-        if result.stdout:
-            logger.debug(f"ODA stdout: {result.stdout[:500]}")
-        if result.stderr:
-            logger.debug(f"ODA stderr: {result.stderr[:500]}")
+        if result.returncode == 0 and bmp_path.exists() and bmp_path.stat().st_size > 0:
+            logger.info(f"DWG embedded thumbnail extracted: {source_path.name}")
+            return bmp_path
         
-        # Cleanup input
-        temp_dwg.unlink(missing_ok=True)
-        input_dir.rmdir()
+        # Cleanup failed attempt
+        bmp_path.unlink(missing_ok=True)
         
-        # Find generated PDF
-        pdf_name = source_path.stem + ".pdf"
-        pdf_path = output_dir / pdf_name
+        # Method 2: Convert to SVG, then to PNG
+        svg_path = temp_dir / f"dwg_{job_id}.svg"
+        png_path = temp_dir / f"dwg_{job_id}.png"
         
-        if pdf_path.exists():
-            logger.info(f"DWG conversion successful: {source_path.name} -> PDF")
-            return pdf_path
+        result = subprocess.run(
+            ["dwg2SVG", "-o", str(svg_path), str(source_path)],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
         
-        # Check if any PDF was created (maybe different name)
-        pdfs = list(output_dir.glob("*.pdf"))
-        if pdfs:
-            logger.info(f"DWG conversion successful (different name): {pdfs[0].name}")
-            return pdfs[0]
+        if result.returncode != 0 or not svg_path.exists():
+            logger.warning(f"dwg2SVG failed for {source_path.name}: {result.stderr[:200] if result.stderr else 'no output'}")
+            return None
         
-        # Log what went wrong
-        logger.error(f"DWG conversion produced no PDF for {source_path.name}")
-        logger.error(f"ODA return code: {result.returncode}")
-        if result.stdout:
-            logger.error(f"ODA stdout: {result.stdout}")
-        if result.stderr:
-            logger.error(f"ODA stderr: {result.stderr}")
+        # Convert SVG to PNG using rsvg-convert (better quality than ImageMagick for SVG)
+        result = subprocess.run(
+            ["rsvg-convert", "-w", "800", "-h", "600", "-o", str(png_path), str(svg_path)],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
         
-        # Cleanup output dir
-        shutil.rmtree(output_dir, ignore_errors=True)
+        # Cleanup SVG
+        svg_path.unlink(missing_ok=True)
+        
+        if result.returncode == 0 and png_path.exists():
+            logger.info(f"DWG converted via SVG: {source_path.name}")
+            return png_path
+        
+        logger.warning(f"SVG to PNG conversion failed for {source_path.name}")
         return None
         
     except subprocess.TimeoutExpired:
         logger.error(f"DWG conversion timed out for {source_path.name}")
         return None
     except FileNotFoundError as e:
-        logger.error(f"ODA File Converter not found: {e}")
+        logger.error(f"LibreDWG tools not found: {e}")
         return None
     except Exception as e:
         logger.error(f"DWG conversion failed for {source_path.name}: {e}", exc_info=True)
@@ -152,19 +132,17 @@ def generate_thumbnail(source_path: Path, dest_path: Path, temp_dir: Optional[Pa
         width, height = settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT
 
         if ext in settings.THUMBNAIL_DWG_EXTENSIONS:
-            # DWG/DXF: Convert to PDF first, then to image
+            # DWG/DXF: Convert to image using LibreDWG
             if temp_dir is None:
                 temp_dir = settings.TEMP_DIR
-            pdf_path = convert_dwg_to_pdf(source_path, temp_dir)
-            if not pdf_path:
+            img_path = convert_dwg_to_image(source_path, temp_dir)
+            if not img_path:
                 return False
-            images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=150)
-            # Cleanup temp PDF
-            pdf_path.unlink(missing_ok=True)
-            pdf_path.parent.rmdir()
-            if not images:
-                return False
-            img = images[0]
+            img = Image.open(img_path)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            # Cleanup temp image
+            img_path.unlink(missing_ok=True)
         elif ext in settings.THUMBNAIL_PDF_EXTENSIONS:
             # PDF: Convert first page to image
             images = convert_from_path(str(source_path), first_page=1, last_page=1, dpi=150)

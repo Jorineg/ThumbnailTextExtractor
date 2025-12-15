@@ -40,9 +40,6 @@ THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
 THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}
 TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".sql", ".py", ".sh", ".bash"}
 
-# ODA File Converter path (DEB installs to /usr/bin)
-ODA_CONVERTER_PATH = os.getenv("ODA_CONVERTER_PATH", "/usr/bin/ODAFileConverter")
-
 
 def validate_config():
     """Validate required configuration."""
