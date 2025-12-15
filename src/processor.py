@@ -68,7 +68,7 @@ def convert_dwg_to_image(source_path: Path, temp_dir: Path) -> Optional[Path]:
         # Method 1: Try dwgbmp to extract embedded thumbnail
         bmp_path = temp_dir / f"dwg_{job_id}.bmp"
         result = subprocess.run(
-            ["dwgbmp", "-o", str(bmp_path), str(source_path)],
+            ["dwgbmp", str(source_path), str(bmp_path)],
             capture_output=True,
             text=True,
             timeout=30
@@ -85,12 +85,14 @@ def convert_dwg_to_image(source_path: Path, temp_dir: Path) -> Optional[Path]:
         svg_path = temp_dir / f"dwg_{job_id}.svg"
         png_path = temp_dir / f"dwg_{job_id}.png"
         
-        result = subprocess.run(
-            ["dwg2SVG", "-o", str(svg_path), str(source_path)],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        with open(svg_path, 'w') as svg_file:
+            result = subprocess.run(
+                ["dwg2SVG", str(source_path)],
+                stdout=svg_file,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60
+            )
         
         if result.returncode != 0 or not svg_path.exists():
             logger.warning(f"dwg2SVG failed for {source_path.name}: {result.stderr[:200] if result.stderr else 'no output'}")
