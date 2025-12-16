@@ -3,7 +3,7 @@ FROM jorineg/ibhelm-base:latest
 # Install poppler for pdf2image and docker CLI for QCAD sidecar
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
-    docker.io \
+    docker-cli \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
