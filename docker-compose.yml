@@ -16,7 +16,23 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
       - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
+      - QCAD_CONTAINER=qcad
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - dwg-exchange:/dwg-exchange
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - qcad
+
+  qcad:
+    image: arjankalfsbeek/qcad:latest
+    container_name: qcad
+    restart: unless-stopped
+    entrypoint: ["tail", "-f", "/dev/null"]
+    volumes:
+      - dwg-exchange:/dwg-exchange
+
+volumes:
+  dwg-exchange:
 

@@ -37,9 +37,7 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 # Supported formats
 THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
-# DWG support disabled - LibreDWG output quality insufficient
-# THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}
-THUMBNAIL_DWG_EXTENSIONS = set()  # Empty = disabled
+THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}  # Converted via QCAD sidecar
 TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".sql", ".py", ".sh", ".bash"}
 
 
