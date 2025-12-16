@@ -30,6 +30,7 @@ THUMBNAIL_BUCKET = os.getenv("THUMBNAIL_BUCKET", "thumbnails")
 # Processing
 THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "400"))
 THUMBNAIL_HEIGHT = int(os.getenv("THUMBNAIL_HEIGHT", "300"))
+THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")  # "top" or "center"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))

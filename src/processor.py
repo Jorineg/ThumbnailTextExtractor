@@ -50,19 +50,19 @@ def can_extract_text(filename: str) -> bool:
 
 
 def create_cover_thumbnail(img: Image.Image, width: int, height: int) -> Image.Image:
-    """Create thumbnail with cover crop (center-crop to fill dimensions)."""
+    """Create thumbnail with cover crop."""
     target_ratio = width / height
     img_ratio = img.width / img.height
 
     if img_ratio > target_ratio:
-        # Image is wider - crop sides
+        # Image is wider - crop sides (always center)
         new_width = int(img.height * target_ratio)
         left = (img.width - new_width) // 2
         img = img.crop((left, 0, left + new_width, img.height))
     else:
-        # Image is taller - crop top/bottom
+        # Image is taller - crop based on THUMBNAIL_CROP_POSITION
         new_height = int(img.width / target_ratio)
-        top = (img.height - new_height) // 2
+        top = 0 if settings.THUMBNAIL_CROP_POSITION == "top" else (img.height - new_height) // 2
         img = img.crop((0, top, img.width, top + new_height))
 
     return img.resize((width, height), Image.Resampling.LANCZOS)
