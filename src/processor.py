@@ -33,12 +33,16 @@ def is_dwg(filename: str) -> bool:
     return get_file_extension(filename) in settings.THUMBNAIL_DWG_EXTENSIONS
 
 
+def is_office(filename: str) -> bool:
+    return get_file_extension(filename) in settings.THUMBNAIL_OFFICE_EXTENSIONS
+
+
 def is_text_file(filename: str) -> bool:
     return get_file_extension(filename) in settings.TEXT_EXTRACT_EXTENSIONS
 
 
 def can_generate_thumbnail(filename: str) -> bool:
-    return is_image(filename) or is_pdf(filename) or is_dwg(filename)
+    return is_image(filename) or is_pdf(filename) or is_dwg(filename) or is_office(filename)
 
 
 def can_extract_text(filename: str) -> bool:
@@ -92,7 +96,7 @@ def convert_dwg_to_pdf(source_path: Path) -> Optional[Path]:
             ],
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=300  # 5 minutes for large/complex DWG files
         )
         
         # Cleanup input
@@ -110,6 +114,42 @@ def convert_dwg_to_pdf(source_path: Path) -> Optional[Path]:
         return None
     except Exception as e:
         logger.error(f"DWG conversion failed for {source_path.name}: {e}", exc_info=True)
+        return None
+
+
+def convert_office_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
+    """Convert Office docs (xlsx, docx, pptx, etc.) to PDF using LibreOffice."""
+    try:
+        result = subprocess.run(
+            [
+                "soffice",
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", str(temp_dir),
+                str(source_path)
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if result.returncode != 0:
+            logger.warning(f"LibreOffice conversion failed for {source_path.name}: {result.stderr[:500] if result.stderr else 'no output'}")
+            return None
+        
+        pdf_path = temp_dir / f"{source_path.stem}.pdf"
+        if pdf_path.exists():
+            logger.info(f"Office doc converted to PDF: {source_path.name}")
+            return pdf_path
+        
+        logger.warning(f"LibreOffice output PDF not found for {source_path.name}")
+        return None
+        
+    except subprocess.TimeoutExpired:
+        logger.error(f"Office conversion timed out for {source_path.name}")
+        return None
+    except Exception as e:
+        logger.error(f"Office conversion failed for {source_path.name}: {e}", exc_info=True)
         return None
 
 
@@ -164,6 +204,8 @@ def extract_text_from_pdf(source_path: Path) -> Optional[str]:
         doc.close()
         
         full_text = "\n\n".join(text_parts)
+        # Remove null bytes - PostgreSQL TEXT fields don't accept them
+        full_text = full_text.replace('\x00', '')
         if len(full_text) > settings.MAX_TEXT_LENGTH:
             full_text = full_text[:settings.MAX_TEXT_LENGTH]
         return full_text if full_text.strip() else None
@@ -211,14 +253,23 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
     if is_dwg(source_path.name):
         pdf_path = convert_dwg_to_pdf(source_path)
         if pdf_path:
-            # Generate thumbnail from PDF
             thumb_name = f"{uuid.uuid4()}.png"
             thumb_path = temp_dir / thumb_name
             if generate_thumbnail(pdf_path, thumb_path, temp_dir):
                 thumbnail_path = thumb_path
-            # Extract text from PDF
             extracted_text = extract_text_from_pdf(pdf_path)
-            # Cleanup
+            pdf_path.unlink(missing_ok=True)
+        return thumbnail_path, extracted_text
+
+    # Special handling for Office docs: convert to PDF, then process
+    if is_office(source_path.name):
+        pdf_path = convert_office_to_pdf(source_path, temp_dir)
+        if pdf_path:
+            thumb_name = f"{uuid.uuid4()}.png"
+            thumb_path = temp_dir / thumb_name
+            if generate_thumbnail(pdf_path, thumb_path, temp_dir):
+                thumbnail_path = thumb_path
+            extracted_text = extract_text_from_pdf(pdf_path)
             pdf_path.unlink(missing_ok=True)
         return thumbnail_path, extracted_text
 
