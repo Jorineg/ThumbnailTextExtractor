@@ -32,6 +32,8 @@ THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "400"))
 THUMBNAIL_HEIGHT = int(os.getenv("THUMBNAIL_HEIGHT", "300"))
 THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")  # "top" or "center"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
+TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))  # 200KB max for unknown text files
+TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))  # 99% printable chars required
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
@@ -41,6 +43,20 @@ THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
 THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}  # Converted via QCAD sidecar
 THUMBNAIL_OFFICE_EXTENSIONS = {".xlsx", ".xls", ".ods", ".docx", ".doc", ".odt", ".pptx", ".ppt", ".odp"}  # Via LibreOffice
 TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".sql", ".py", ".sh", ".bash"}
+
+# Common thumbnail paths in zip-based document formats
+ARCHIVE_THUMBNAIL_PATHS = [
+    "Thumbnails/Preview.jpg",
+    "Thumbnails/Preview.png",
+    "QuickLook/Thumbnail.jpg",
+    "QuickLook/Thumbnail.png",
+    "QuickLook/Preview.jpg",
+    "QuickLook/Preview.png",
+    "preview.png",
+    "preview.jpg",
+    "previews/preview.png",
+    "previews/preview.jpg",
+]
 
 
 def validate_config():

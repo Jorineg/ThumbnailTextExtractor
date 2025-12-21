@@ -3,11 +3,14 @@ import os
 import shutil
 import subprocess
 import uuid
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Optional, Tuple
 from PIL import Image
 import pillow_heif  # Registers HEIC/HEIF support with Pillow
 import fitz  # PyMuPDF
+import olefile
 from pdf2image import convert_from_path
 
 pillow_heif.register_heif_opener()  # Enable HEIC support in Pillow
@@ -153,6 +156,69 @@ def convert_office_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
         return None
 
 
+def extract_archive_thumbnail(source_path: Path, dest_path: Path) -> bool:
+    """
+    Extract embedded thumbnail from zip-based document formats.
+    Works with .idraw, .sketch, .graffle, .pages, .numbers, .key, .afdesign, etc.
+    """
+    try:
+        if not zipfile.is_zipfile(source_path):
+            logger.debug(f"Not a valid zip archive: {source_path.name}")
+            return False
+
+        with zipfile.ZipFile(source_path, 'r') as zf:
+            names = zf.namelist()
+            for thumb_path in settings.ARCHIVE_THUMBNAIL_PATHS:
+                if thumb_path in names:
+                    data = zf.read(thumb_path)
+                    # Load and resize to standard thumbnail dimensions
+                    img = Image.open(BytesIO(data))
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    thumbnail = create_cover_thumbnail(img, settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT)
+                    thumbnail.save(dest_path, "PNG", optimize=True)
+                    logger.info(f"Extracted thumbnail from {source_path.name} ({thumb_path})")
+                    return True
+
+        logger.debug(f"No thumbnail found in archive: {source_path.name}")
+        return False
+
+    except Exception as e:
+        logger.error(f"Failed to extract archive thumbnail from {source_path.name}: {e}")
+        return False
+
+
+def extract_ole_thumbnail(source_path: Path, dest_path: Path) -> bool:
+    """
+    Extract thumbnail from OLE compound documents.
+    Works with Nova/Trimble files (.n4d, .n4m, .nbup, .nbum) that store BMP in BITMAP stream.
+    """
+    try:
+        if not olefile.isOleFile(source_path):
+            return False
+
+        ole = olefile.OleFileIO(source_path)
+        try:
+            if ole.exists('BITMAP'):
+                bmp_data = ole.openstream('BITMAP').read()
+                if bmp_data[:2] == b'BM':  # Valid BMP header
+                    img = Image.open(BytesIO(bmp_data))
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    thumbnail = create_cover_thumbnail(img, settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT)
+                    thumbnail.save(dest_path, "PNG", optimize=True)
+                    logger.info(f"Extracted OLE thumbnail from {source_path.name}")
+                    return True
+        finally:
+            ole.close()
+
+        return False
+
+    except Exception as e:
+        logger.debug(f"OLE thumbnail extraction failed for {source_path.name}: {e}")
+        return False
+
+
 def generate_thumbnail(source_path: Path, dest_path: Path, temp_dir: Optional[Path] = None) -> bool:
     """Generate thumbnail for image, PDF, or DWG."""
     try:
@@ -241,6 +307,57 @@ def extract_text(source_path: Path) -> Optional[str]:
     return None
 
 
+def extract_text_fallback(source_path: Path) -> Optional[str]:
+    """
+    Try to extract text from unknown file types.
+    Only succeeds if the file looks like valid text (high printable char ratio, no null bytes).
+    Works for plain text formats like .ifc, .nvtm, etc.
+    """
+    try:
+        # Skip files that are too large
+        file_size = source_path.stat().st_size
+        if file_size > settings.TEXT_FALLBACK_MAX_SIZE:
+            return None
+
+        # Read raw bytes first to check for binary content
+        with open(source_path, "rb") as f:
+            raw_data = f.read(min(file_size, settings.MAX_TEXT_LENGTH))
+
+        # Reject if contains null bytes (strong indicator of binary)
+        if b'\x00' in raw_data:
+            return None
+
+        # Try to decode as UTF-8
+        try:
+            text = raw_data.decode("utf-8")
+        except UnicodeDecodeError:
+            # Try latin-1 as fallback
+            try:
+                text = raw_data.decode("latin-1")
+            except UnicodeDecodeError:
+                return None
+
+        if not text.strip():
+            return None
+
+        # Check printable character ratio
+        printable_chars = sum(1 for c in text if c.isprintable() or c in '\n\r\t')
+        printable_ratio = printable_chars / len(text) if text else 0
+
+        if printable_ratio < settings.TEXT_FALLBACK_MIN_PRINTABLE:
+            return None
+
+        # Remove null bytes just in case (PostgreSQL TEXT doesn't accept them)
+        text = text.replace('\x00', '')
+
+        logger.info(f"Extracted text from unknown format {source_path.name} ({len(text)} chars, {printable_ratio:.0%} printable)")
+        return text
+
+    except Exception as e:
+        logger.debug(f"Text fallback extraction failed for {source_path.name}: {e}")
+        return None
+
+
 def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
     """
     Process a file: generate thumbnail and extract text.
@@ -273,7 +390,7 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
             pdf_path.unlink(missing_ok=True)
         return thumbnail_path, extracted_text
 
-    # Standard processing for other file types
+    # Standard processing for known file types
     if can_generate_thumbnail(source_path.name):
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
@@ -282,6 +399,27 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
 
     if can_extract_text(source_path.name):
         extracted_text = extract_text(source_path)
+
+    # Fallback: try extracting thumbnail from zip-based formats (any file type)
+    # Works for .idraw, .sketch, .pages, .key, .afdesign, etc.
+    if thumbnail_path is None:
+        thumb_name = f"{uuid.uuid4()}.png"
+        thumb_path = temp_dir / thumb_name
+        if extract_archive_thumbnail(source_path, thumb_path):
+            thumbnail_path = thumb_path
+
+    # Fallback: try extracting thumbnail from OLE compound documents
+    # Works for Nova/Trimble files (.n4d, .n4m, .nbup, .nbum)
+    if thumbnail_path is None:
+        thumb_name = f"{uuid.uuid4()}.png"
+        thumb_path = temp_dir / thumb_name
+        if extract_ole_thumbnail(source_path, thumb_path):
+            thumbnail_path = thumb_path
+
+    # Fallback: try extracting text from unknown file types
+    # Works for plain text formats like .ifc, .nvtm, etc.
+    if extracted_text is None:
+        extracted_text = extract_text_fallback(source_path)
 
     return thumbnail_path, extracted_text
 
