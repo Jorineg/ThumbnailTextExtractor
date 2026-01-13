@@ -55,12 +55,12 @@ class QueueClient:
             return []
 
     def mark_processing(self, content_hash: str) -> bool:
-        """Mark item as processing."""
+        """Mark item as indexing (processing)."""
         try:
             url = f"{self.base_url}/file_contents"
             params = {"content_hash": f"eq.{content_hash}"}
             data = {
-                "processing_status": "processing",
+                "processing_status": "indexing",
                 "last_status_change": datetime.now(timezone.utc).isoformat(),
                 "db_updated_at": datetime.now(timezone.utc).isoformat()
             }
@@ -119,7 +119,7 @@ class QueueClient:
     def get_queue_stats(self) -> Dict[str, int]:
         """Get queue statistics for monitoring."""
         try:
-            stats = {"pending": 0, "processing": 0, "done": 0, "error": 0}
+            stats = {"pending": 0, "indexing": 0, "done": 0, "error": 0}
             url = f"{self.base_url}/file_contents"
             
             for status in stats.keys():
@@ -132,7 +132,7 @@ class QueueClient:
             return stats
         except Exception as e:
             logger.error(f"Failed to get queue stats: {e}")
-            return {"pending": 0, "processing": 0, "done": 0, "error": 0}
+            return {"pending": 0, "indexing": 0, "done": 0, "error": 0}
 
     def close(self):
         self._client.close()
