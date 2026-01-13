@@ -1,9 +1,11 @@
 """Queue operations via Supabase REST API using file_contents.processing_status."""
 import httpx
 from datetime import datetime, timezone
+from typing import Any
 
 from src import settings
 from src.logging_conf import logger
+
 
 
 class QueueClient:
@@ -19,7 +21,7 @@ class QueueClient:
         }
         self._client = httpx.Client(timeout=30.0)
 
-    def claim_pending(self, limit: int = 5) -> List[Dict[str, Any]]:
+    def claim_pending(self, limit: int = 5) -> list[dict[str, Any]]:
         """Atomically claim pending items (SELECT FOR UPDATE SKIP LOCKED + mark as indexing)."""
         try:
             url = f"{self.base_url}/rpc/claim_pending_file_content"
@@ -75,7 +77,7 @@ class QueueClient:
             logger.error(f"Failed to mark {content_hash[:8]} as failed: {e}")
             return False
 
-    def get_queue_stats(self) -> Dict[str, int]:
+    def get_queue_stats(self) -> dict[str, int]:
         """Get queue statistics for monitoring."""
         try:
             stats = {"pending": 0, "indexing": 0, "done": 0, "error": 0}
