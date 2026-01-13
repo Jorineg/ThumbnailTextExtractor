@@ -121,17 +121,13 @@ class App:
                     time.sleep(settings.POLL_INTERVAL)
                     continue
 
-                # Fetch pending items from file_contents
-                items = self.queue.fetch_pending(limit=5)
+                # Atomically claim pending items (already marked as indexing)
+                items = self.queue.claim_pending(limit=5)
 
                 if items:
                     for item in items:
                         if not self.running:
                             break
-
-                        content_hash = item["content_hash"]
-                        if not self.queue.mark_processing(content_hash):
-                            continue
 
                         if self.process_queue_item(item):
                             processed_count += 1

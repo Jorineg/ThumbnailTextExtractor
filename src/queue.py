@@ -1,6 +1,5 @@
 """Queue operations via Supabase REST API using file_contents.processing_status."""
 import httpx
-from typing import List, Dict, Any
 from datetime import datetime, timezone
 
 from src import settings
@@ -20,56 +19,16 @@ class QueueClient:
         }
         self._client = httpx.Client(timeout=30.0)
 
-    def fetch_pending(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Fetch pending items from file_contents where s3_status=uploaded and processing_status=pending."""
+    def claim_pending(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Atomically claim pending items (SELECT FOR UPDATE SKIP LOCKED + mark as indexing)."""
         try:
-            url = f"{self.base_url}/file_contents"
-            params = {
-                "select": "content_hash,storage_path,size_bytes,try_count",
-                "s3_status": "eq.uploaded",
-                "processing_status": "eq.pending",
-                "order": "db_created_at.asc",
-                "limit": str(limit),
-            }
-            response = self._client.get(url, headers=self.headers, params=params)
+            url = f"{self.base_url}/rpc/claim_pending_file_content"
+            response = self._client.post(url, headers=self.headers, json={"p_limit": limit})
             response.raise_for_status()
-            items = response.json()
-            
-            # For each item, get a representative full_path from files table for extension detection
-            for item in items:
-                file_url = f"{self.base_url}/files"
-                file_params = {
-                    "select": "full_path",
-                    "content_hash": f"eq.{item['content_hash']}",
-                    "limit": "1"
-                }
-                file_resp = self._client.get(file_url, headers=self.headers, params=file_params)
-                if file_resp.status_code == 200 and file_resp.json():
-                    item["full_path"] = file_resp.json()[0]["full_path"]
-                else:
-                    item["full_path"] = None
-            
-            return items
+            return response.json()
         except Exception as e:
-            logger.error(f"Failed to fetch pending queue items: {e}")
+            logger.error(f"Failed to claim pending queue items: {e}")
             return []
-
-    def mark_processing(self, content_hash: str) -> bool:
-        """Mark item as indexing (processing)."""
-        try:
-            url = f"{self.base_url}/file_contents"
-            params = {"content_hash": f"eq.{content_hash}"}
-            data = {
-                "processing_status": "indexing",
-                "last_status_change": datetime.now(timezone.utc).isoformat(),
-                "db_updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            response = self._client.patch(url, headers=self.headers, params=params, json=data)
-            response.raise_for_status()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to mark {content_hash[:8]} as processing: {e}")
-            return False
 
     def mark_completed(self, content_hash: str, thumbnail_path: str | None, extracted_text: str | None) -> bool:
         """Mark item as done and store results."""
