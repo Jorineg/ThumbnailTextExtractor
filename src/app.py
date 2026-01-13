@@ -1,8 +1,7 @@
-"""Main application: poll queue and process files."""
+"""Main application: poll file_contents queue and process files."""
 import sys
 import time
 import signal
-import os
 from pathlib import Path
 
 from src import settings
@@ -23,41 +22,42 @@ class App:
         self.running = False
 
     def process_queue_item(self, item: dict) -> bool:
-        """Process a single queue item."""
-        queue_id = item["id"]
-        file_info = item.get("files")
-        
-        if not file_info:
-            logger.warning(f"Queue item {queue_id} has no file info, marking failed")
-            self.queue.mark_failed(queue_id, "No file info", item["attempts"] + 1)
+        """Process a single queue item from file_contents."""
+        content_hash = item["content_hash"]
+        storage_path = item["storage_path"]
+        full_path = item.get("full_path")
+        try_count = item.get("try_count", 0)
+
+        if not storage_path:
+            logger.warning(f"Content {content_hash[:8]} has no storage_path, skipping")
+            self.queue.mark_failed(content_hash, try_count + 1)
             return False
 
-        file_id = file_info["id"]
-        storage_path = file_info["storage_path"]
-        filename = file_info["filename"]
+        # Use full_path for extension detection, fall back to storage_path
+        filename = Path(full_path).name if full_path else Path(storage_path).name
 
         # Skip if file type not supported for any processing
         if not can_generate_thumbnail(filename) and not can_extract_text(filename):
             logger.debug(f"Skipping unsupported file type: {filename}")
-            self.queue.mark_completed(queue_id)
+            self.queue.mark_completed(content_hash, None, None)
             return True
 
-        logger.info(f"Processing: {filename}", extra={"file_id": file_id})
+        logger.info(f"Processing: {filename} ({content_hash[:8]})")
 
         # Download file to temp
-        temp_file = settings.TEMP_DIR / f"{file_id}_{filename}"
+        temp_file = settings.TEMP_DIR / f"{content_hash}_{filename}"
         if not self.storage.download_file(settings.STORAGE_BUCKET, storage_path, temp_file):
-            self.queue.mark_failed(queue_id, "Download failed", item["attempts"] + 1)
+            self.queue.mark_failed(content_hash, try_count + 1)
             return False
 
         try:
             # Process file
             thumbnail_local, extracted_text = process_file(temp_file, settings.TEMP_DIR)
 
-            # Upload thumbnail if generated
+            # Upload thumbnail if generated (use content_hash as name for deduplication)
             thumbnail_storage_path = None
             if thumbnail_local and thumbnail_local.exists():
-                thumbnail_storage_path = f"{file_id}.png"
+                thumbnail_storage_path = f"{content_hash}.png"
                 if not self.storage.upload_file(
                     settings.THUMBNAIL_BUCKET, thumbnail_storage_path, thumbnail_local, "image/png"
                 ):
@@ -66,25 +66,23 @@ class App:
                 # Clean up local thumbnail
                 thumbnail_local.unlink(missing_ok=True)
 
-            # Update file record
-            if not self.queue.update_file_results(file_id, thumbnail_storage_path, extracted_text):
-                self.queue.mark_failed(queue_id, "DB update failed", item["attempts"] + 1)
+            # Update file_contents record
+            if not self.queue.mark_completed(content_hash, thumbnail_storage_path, extracted_text):
+                self.queue.mark_failed(content_hash, try_count + 1)
                 return False
 
-            self.queue.mark_completed(queue_id)
-            
             result_parts = []
             if thumbnail_storage_path:
                 result_parts.append("thumbnail")
             if extracted_text:
                 result_parts.append(f"text ({len(extracted_text)} chars)")
-            
+
             logger.info(f"Completed: {filename} - {', '.join(result_parts) if result_parts else 'no output'}")
             return True
 
         except Exception as e:
             logger.error(f"Error processing {filename}: {e}", exc_info=True)
-            self.queue.mark_failed(queue_id, str(e), item["attempts"] + 1)
+            self.queue.mark_failed(content_hash, try_count + 1)
             return False
 
         finally:
@@ -107,14 +105,14 @@ class App:
             logger.error("Failed to ensure thumbnail bucket exists")
             sys.exit(1)
 
-        logger.info("ThumbnailTextExtractor starting")
+        logger.info("ThumbnailTextExtractor starting (CAS mode)")
         logger.info(f"Storage bucket: {settings.STORAGE_BUCKET}")
         logger.info(f"Thumbnail bucket: {settings.THUMBNAIL_BUCKET}")
         logger.info(f"Thumbnail size: {settings.THUMBNAIL_WIDTH}x{settings.THUMBNAIL_HEIGHT}")
         logger.info(f"Poll interval: {settings.POLL_INTERVAL}s")
 
         processed_count = 0
-        
+
         try:
             while self.running:
                 # Check storage availability before processing
@@ -123,18 +121,18 @@ class App:
                     time.sleep(settings.POLL_INTERVAL)
                     continue
 
-                # Fetch pending items
+                # Fetch pending items from file_contents
                 items = self.queue.fetch_pending(limit=5)
 
                 if items:
                     for item in items:
                         if not self.running:
                             break
-                        
-                        queue_id = item["id"]
-                        if not self.queue.mark_processing(queue_id):
+
+                        content_hash = item["content_hash"]
+                        if not self.queue.mark_processing(content_hash):
                             continue
-                        
+
                         if self.process_queue_item(item):
                             processed_count += 1
 
@@ -165,4 +163,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
