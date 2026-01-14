@@ -42,7 +42,7 @@ THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", 
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
 THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}  # Converted via QCAD sidecar
 THUMBNAIL_OFFICE_EXTENSIONS = {".xlsx", ".xls", ".ods", ".docx", ".doc", ".odt", ".pptx", ".ppt", ".odp"}  # Via LibreOffice
-TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".sql", ".py", ".sh", ".bash"}
+TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".py", ".sh", ".bash"}
 
 # Common thumbnail paths in zip-based document formats
 ARCHIVE_THUMBNAIL_PATHS = [
