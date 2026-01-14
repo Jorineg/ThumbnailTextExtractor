@@ -33,7 +33,7 @@ THUMBNAIL_HEIGHT = int(os.getenv("THUMBNAIL_HEIGHT", "300"))
 THUMBNAIL_LARGE_WIDTH = int(os.getenv("THUMBNAIL_LARGE_WIDTH", "800"))
 THUMBNAIL_LARGE_HEIGHT = int(os.getenv("THUMBNAIL_LARGE_HEIGHT", "600"))
 # File extensions that use the smaller thumbnail size (comma-separated, e.g. "pdf,png,jpg,jpeg,heic,heif,gif")
-THUMBNAIL_SMALL_EXTENSIONS_RAW = os.getenv("THUMBNAIL_SMALL_EXTENSIONS", "pdf,png,jpg,jpeg,heic,heif,gif")
+THUMBNAIL_SMALL_EXTENSIONS_RAW = os.getenv("THUMBNAIL_SMALL_EXTENSIONS", "pdf,png,jpg,jpeg,heic,heif,gif,svg")
 THUMBNAIL_SMALL_EXTENSIONS = {f".{ext.strip().lower()}" for ext in THUMBNAIL_SMALL_EXTENSIONS_RAW.split(",") if ext.strip()}
 THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")  # "top" or "center"
 # DWG processing: high-res intermediate for content-aware cropping
@@ -49,7 +49,9 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}
 THUMBNAIL_DWG_EXTENSIONS = {".dwg", ".dxf"}  # Converted via QCAD sidecar
-THUMBNAIL_OFFICE_EXTENSIONS = {".xlsx", ".xls", ".ods", ".docx", ".doc", ".odt", ".pptx", ".ppt", ".odp", ".pages", ".numbers", ".key"}  # Via LibreOffice
+THUMBNAIL_SVG_EXTENSIONS = {".svg"}  # Converted via cairosvg
+THUMBNAIL_VIDEO_EXTENSIONS = {".mov", ".mp4", ".avi", ".webm", ".mkv", ".m4v"}  # Frame extraction via ffmpeg
+THUMBNAIL_OFFICE_EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".ods", ".docx", ".doc", ".docm", ".odt", ".pptx", ".ppt", ".pptm", ".odp", ".pages", ".numbers", ".key"}  # Via LibreOffice
 TEXT_EXTRACT_EXTENSIONS = {".txt", ".json", ".xml", ".js", ".ts", ".css", ".html", ".md", ".csv", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".py", ".sh", ".bash"}
 
 # Common thumbnail paths in zip-based document formats

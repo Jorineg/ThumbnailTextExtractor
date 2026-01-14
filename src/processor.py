@@ -13,6 +13,7 @@ from PIL import Image
 import pillow_heif  # Registers HEIC/HEIF support with Pillow
 import fitz  # PyMuPDF
 import olefile
+import cairosvg
 from pdf2image import convert_from_path
 
 pillow_heif.register_heif_opener()  # Enable HEIC support in Pillow
@@ -42,12 +43,20 @@ def is_office(filename: str) -> bool:
     return get_file_extension(filename) in settings.THUMBNAIL_OFFICE_EXTENSIONS
 
 
+def is_svg(filename: str) -> bool:
+    return get_file_extension(filename) in settings.THUMBNAIL_SVG_EXTENSIONS
+
+
+def is_video(filename: str) -> bool:
+    return get_file_extension(filename) in settings.THUMBNAIL_VIDEO_EXTENSIONS
+
+
 def is_text_file(filename: str) -> bool:
     return get_file_extension(filename) in settings.TEXT_EXTRACT_EXTENSIONS
 
 
 def can_generate_thumbnail(filename: str) -> bool:
-    return is_image(filename) or is_pdf(filename) or is_dwg(filename) or is_office(filename)
+    return is_image(filename) or is_pdf(filename) or is_dwg(filename) or is_office(filename) or is_svg(filename) or is_video(filename)
 
 
 def get_thumbnail_dimensions(filename: str) -> Tuple[int, int]:
@@ -163,6 +172,63 @@ def convert_office_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
         return None
     except Exception as e:
         logger.error(f"Office conversion failed for {source_path.name}: {e}", exc_info=True)
+        return None
+
+
+def convert_svg_to_image(source_path: Path, width: int) -> Optional[Image.Image]:
+    """Convert SVG to PIL Image using cairosvg."""
+    try:
+        png_data = cairosvg.svg2png(url=str(source_path), output_width=width * 2)  # 2x for quality
+        img = Image.open(BytesIO(png_data))
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA")
+        # Convert RGBA to RGB with white background for PNG output
+        if img.mode == "RGBA":
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        logger.info(f"SVG converted to image: {source_path.name}")
+        return img
+    except Exception as e:
+        logger.error(f"SVG conversion failed for {source_path.name}: {e}")
+        return None
+
+
+def extract_video_frame(source_path: Path, temp_dir: Path) -> Optional[Path]:
+    """Extract a frame from video using ffmpeg."""
+    try:
+        frame_path = temp_dir / f"{uuid.uuid4()}.png"
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(source_path),
+                "-ss", "00:00:01",  # 1 second in
+                "-frames:v", "1",
+                "-q:v", "2",
+                str(frame_path)
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0 and frame_path.exists():
+            logger.info(f"Video frame extracted: {source_path.name}")
+            return frame_path
+        # Fallback: try frame at 0 seconds (for very short videos)
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(source_path), "-frames:v", "1", "-q:v", "2", str(frame_path)],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0 and frame_path.exists():
+            logger.info(f"Video frame extracted (first frame): {source_path.name}")
+            return frame_path
+        logger.warning(f"ffmpeg failed for {source_path.name}: {result.stderr[:500] if result.stderr else 'no output'}")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.error(f"Video frame extraction timed out for {source_path.name}")
+        return None
+    except Exception as e:
+        logger.error(f"Video frame extraction failed for {source_path.name}: {e}")
         return None
 
 
@@ -484,6 +550,32 @@ def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[
             extracted_text = extract_text_from_pdf(pdf_path)
             pdf_path.unlink(missing_ok=True)
         return thumbnail_path, extracted_text
+
+    # Special handling for SVG: convert via cairosvg
+    if is_svg(source_path.name):
+        img = convert_svg_to_image(source_path, width)
+        if img:
+            thumb_name = f"{uuid.uuid4()}.png"
+            thumb_path = temp_dir / thumb_name
+            thumbnail = create_cover_thumbnail(img, width, height)
+            thumbnail.save(thumb_path, "PNG", optimize=True)
+            thumbnail_path = thumb_path
+        return thumbnail_path, None  # SVG has no text to extract
+
+    # Special handling for video: extract frame via ffmpeg
+    if is_video(source_path.name):
+        frame_path = extract_video_frame(source_path, temp_dir)
+        if frame_path:
+            thumb_name = f"{uuid.uuid4()}.png"
+            thumb_path = temp_dir / thumb_name
+            img = Image.open(frame_path)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            thumbnail = create_cover_thumbnail(img, width, height)
+            thumbnail.save(thumb_path, "PNG", optimize=True)
+            thumbnail_path = thumb_path
+            frame_path.unlink(missing_ok=True)
+        return thumbnail_path, None  # Video has no text to extract
 
     # Standard processing for known file types
     if can_generate_thumbnail(source_path.name):
