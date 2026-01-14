@@ -30,7 +30,15 @@ THUMBNAIL_BUCKET = os.getenv("THUMBNAIL_BUCKET", "thumbnails")
 # Processing
 THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "400"))
 THUMBNAIL_HEIGHT = int(os.getenv("THUMBNAIL_HEIGHT", "300"))
+THUMBNAIL_LARGE_WIDTH = int(os.getenv("THUMBNAIL_LARGE_WIDTH", "800"))
+THUMBNAIL_LARGE_HEIGHT = int(os.getenv("THUMBNAIL_LARGE_HEIGHT", "600"))
+# File extensions that use the smaller thumbnail size (comma-separated, e.g. "pdf,png,jpg,jpeg,heic,heif,gif")
+THUMBNAIL_SMALL_EXTENSIONS_RAW = os.getenv("THUMBNAIL_SMALL_EXTENSIONS", "pdf,png,jpg,jpeg,heic,heif,gif")
+THUMBNAIL_SMALL_EXTENSIONS = {f".{ext.strip().lower()}" for ext in THUMBNAIL_SMALL_EXTENSIONS_RAW.split(",") if ext.strip()}
 THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")  # "top" or "center"
+# DWG processing: high-res intermediate for content-aware cropping
+DWG_INTERMEDIATE_DPI = int(os.getenv("DWG_INTERMEDIATE_DPI", "600"))
+DWG_WHITE_THRESHOLD = int(os.getenv("DWG_WHITE_THRESHOLD", "250"))  # Pixel value above which is considered "white"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
 TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))  # 200KB max for unknown text files
 TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))  # 99% printable chars required

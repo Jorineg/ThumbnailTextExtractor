@@ -51,8 +51,8 @@ class App:
             return False
 
         try:
-            # Process file
-            thumbnail_local, extracted_text = process_file(temp_file, settings.TEMP_DIR)
+            # Process file (pass original filename for dimension calculation)
+            thumbnail_local, extracted_text = process_file(temp_file, settings.TEMP_DIR, filename)
 
             # Upload thumbnail if generated (use content_hash as name for deduplication)
             thumbnail_storage_path = None

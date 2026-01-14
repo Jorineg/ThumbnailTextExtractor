@@ -7,6 +7,8 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Tuple
+
+import numpy as np
 from PIL import Image
 import pillow_heif  # Registers HEIC/HEIF support with Pillow
 import fitz  # PyMuPDF
@@ -46,6 +48,14 @@ def is_text_file(filename: str) -> bool:
 
 def can_generate_thumbnail(filename: str) -> bool:
     return is_image(filename) or is_pdf(filename) or is_dwg(filename) or is_office(filename)
+
+
+def get_thumbnail_dimensions(filename: str) -> Tuple[int, int]:
+    """Get thumbnail dimensions based on file type."""
+    ext = get_file_extension(filename)
+    if ext in settings.THUMBNAIL_SMALL_EXTENSIONS:
+        return settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT
+    return settings.THUMBNAIL_LARGE_WIDTH, settings.THUMBNAIL_LARGE_HEIGHT
 
 
 def can_extract_text(filename: str) -> bool:
@@ -156,7 +166,63 @@ def convert_office_to_pdf(source_path: Path, temp_dir: Path) -> Optional[Path]:
         return None
 
 
-def extract_archive_thumbnail(source_path: Path, dest_path: Path) -> bool:
+def find_content_bounds(img: Image.Image, threshold: int = 250) -> Tuple[int, int, int, int]:
+    """
+    Find bounding box of non-white content in image.
+    Returns (left, top, right, bottom) coordinates.
+    """
+    # Convert to grayscale for analysis
+    gray = img.convert("L")
+    arr = np.array(gray)
+    
+    # Find non-white pixels (below threshold)
+    non_white = arr < threshold
+    
+    if not non_white.any():
+        # All white, return full image
+        return 0, 0, img.width, img.height
+    
+    # Find bounds
+    rows = np.any(non_white, axis=1)
+    cols = np.any(non_white, axis=0)
+    
+    top = np.argmax(rows)
+    bottom = len(rows) - np.argmax(rows[::-1])
+    left = np.argmax(cols)
+    right = len(cols) - np.argmax(cols[::-1])
+    
+    return left, top, right, bottom
+
+
+def crop_to_content(img: Image.Image, margin_ratio: float = 0.02) -> Image.Image:
+    """
+    Crop image to content bounds with a small margin.
+    Used for DWG files where content may be in a corner of the page.
+    """
+    left, top, right, bottom = find_content_bounds(img, settings.DWG_WHITE_THRESHOLD)
+    
+    content_width = right - left
+    content_height = bottom - top
+    
+    if content_width <= 0 or content_height <= 0:
+        return img
+    
+    # Add margin (percentage of content dimensions)
+    margin_x = int(content_width * margin_ratio)
+    margin_y = int(content_height * margin_ratio)
+    
+    # Expand bounds with margin, clamped to image bounds
+    left = max(0, left - margin_x)
+    top = max(0, top - margin_y)
+    right = min(img.width, right + margin_x)
+    bottom = min(img.height, bottom + margin_y)
+    
+    cropped = img.crop((left, top, right, bottom))
+    logger.debug(f"Content crop: {img.width}x{img.height} -> {cropped.width}x{cropped.height}")
+    return cropped
+
+
+def extract_archive_thumbnail(source_path: Path, dest_path: Path, width: int, height: int) -> bool:
     """
     Extract embedded thumbnail from zip-based document formats.
     Works with .idraw, .sketch, .graffle, .pages, .numbers, .key, .afdesign, etc.
@@ -171,11 +237,10 @@ def extract_archive_thumbnail(source_path: Path, dest_path: Path) -> bool:
             for thumb_path in settings.ARCHIVE_THUMBNAIL_PATHS:
                 if thumb_path in names:
                     data = zf.read(thumb_path)
-                    # Load and resize to standard thumbnail dimensions
                     img = Image.open(BytesIO(data))
                     if img.mode not in ("RGB", "L"):
                         img = img.convert("RGB")
-                    thumbnail = create_cover_thumbnail(img, settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT)
+                    thumbnail = create_cover_thumbnail(img, width, height)
                     thumbnail.save(dest_path, "PNG", optimize=True)
                     logger.info(f"Extracted thumbnail from {source_path.name} ({thumb_path})")
                     return True
@@ -188,7 +253,7 @@ def extract_archive_thumbnail(source_path: Path, dest_path: Path) -> bool:
         return False
 
 
-def extract_ole_thumbnail(source_path: Path, dest_path: Path) -> bool:
+def extract_ole_thumbnail(source_path: Path, dest_path: Path, width: int, height: int) -> bool:
     """
     Extract thumbnail from OLE compound documents.
     Works with Nova/Trimble files (.n4d, .n4m, .nbup, .nbum) that store BMP in BITMAP stream.
@@ -205,7 +270,7 @@ def extract_ole_thumbnail(source_path: Path, dest_path: Path) -> bool:
                     img = Image.open(BytesIO(bmp_data))
                     if img.mode not in ("RGB", "L"):
                         img = img.convert("RGB")
-                    thumbnail = create_cover_thumbnail(img, settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT)
+                    thumbnail = create_cover_thumbnail(img, width, height)
                     thumbnail.save(dest_path, "PNG", optimize=True)
                     logger.info(f"Extracted OLE thumbnail from {source_path.name}")
                     return True
@@ -219,39 +284,62 @@ def extract_ole_thumbnail(source_path: Path, dest_path: Path) -> bool:
         return False
 
 
-def generate_thumbnail(source_path: Path, dest_path: Path, temp_dir: Optional[Path] = None) -> bool:
+def generate_thumbnail_from_pdf(pdf_path: Path, width: int, height: int, is_dwg: bool = False) -> Optional[Image.Image]:
+    """Generate thumbnail from PDF, with optional DWG content-aware cropping."""
+    try:
+        if is_dwg:
+            # DWG: Use high-res intermediate for content detection
+            images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=settings.DWG_INTERMEDIATE_DPI)
+            if not images:
+                return None
+            img = images[0]
+            # Crop to content before scaling
+            img = crop_to_content(img)
+        else:
+            # Regular PDF: standard DPI
+            images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=150)
+            if not images:
+                return None
+            img = images[0]
+        
+        return create_cover_thumbnail(img, width, height)
+    except Exception as e:
+        logger.error(f"Failed to convert PDF to thumbnail: {e}")
+        return None
+
+
+def generate_thumbnail(source_path: Path, dest_path: Path, original_filename: str, temp_dir: Optional[Path] = None) -> bool:
     """Generate thumbnail for image, PDF, or DWG."""
     try:
         ext = get_file_extension(source_path.name)
-        width, height = settings.THUMBNAIL_WIDTH, settings.THUMBNAIL_HEIGHT
+        width, height = get_thumbnail_dimensions(original_filename)
 
         if ext in settings.THUMBNAIL_DWG_EXTENSIONS:
-            # DWG/DXF: Convert to PDF via QCAD, then to image
+            # DWG/DXF: Convert to PDF via QCAD, then use content-aware processing
             pdf_path = convert_dwg_to_pdf(source_path)
             if not pdf_path:
                 return False
-            images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=150)
-            # Cleanup temp PDF
+            thumbnail = generate_thumbnail_from_pdf(pdf_path, width, height, is_dwg=True)
             pdf_path.unlink(missing_ok=True)
-            if not images:
+            if thumbnail is None:
                 return False
-            img = images[0]
+            thumbnail.save(dest_path, "PNG", optimize=True)
+            return True
         elif ext in settings.THUMBNAIL_PDF_EXTENSIONS:
             # PDF: Convert first page to image
-            images = convert_from_path(str(source_path), first_page=1, last_page=1, dpi=150)
-            if not images:
+            thumbnail = generate_thumbnail_from_pdf(source_path, width, height, is_dwg=False)
+            if thumbnail is None:
                 return False
-            img = images[0]
+            thumbnail.save(dest_path, "PNG", optimize=True)
+            return True
         else:
             # Image file
             img = Image.open(source_path)
-            # Convert to RGB if necessary (handles RGBA, P, etc.)
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
-
-        thumbnail = create_cover_thumbnail(img, width, height)
-        thumbnail.save(dest_path, "PNG", optimize=True)
-        return True
+            thumbnail = create_cover_thumbnail(img, width, height)
+            thumbnail.save(dest_path, "PNG", optimize=True)
+            return True
 
     except Exception as e:
         logger.error(f"Failed to generate thumbnail for {source_path.name}: {e}")
@@ -358,13 +446,16 @@ def extract_text_fallback(source_path: Path) -> Optional[str]:
         return None
 
 
-def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
+def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[str] = None) -> Tuple[Optional[Path], Optional[str]]:
     """
     Process a file: generate thumbnail and extract text.
     Returns (thumbnail_path, extracted_text).
+    original_filename is used to determine thumbnail dimensions (uses source_path.name if not provided).
     """
     thumbnail_path = None
     extracted_text = None
+    filename = original_filename or source_path.name
+    width, height = get_thumbnail_dimensions(filename)
 
     # Special handling for DWG: convert once, use for both thumbnail and text
     if is_dwg(source_path.name):
@@ -372,7 +463,9 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
         if pdf_path:
             thumb_name = f"{uuid.uuid4()}.png"
             thumb_path = temp_dir / thumb_name
-            if generate_thumbnail(pdf_path, thumb_path, temp_dir):
+            thumbnail = generate_thumbnail_from_pdf(pdf_path, width, height, is_dwg=True)
+            if thumbnail:
+                thumbnail.save(thumb_path, "PNG", optimize=True)
                 thumbnail_path = thumb_path
             extracted_text = extract_text_from_pdf(pdf_path)
             pdf_path.unlink(missing_ok=True)
@@ -384,7 +477,9 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
         if pdf_path:
             thumb_name = f"{uuid.uuid4()}.png"
             thumb_path = temp_dir / thumb_name
-            if generate_thumbnail(pdf_path, thumb_path, temp_dir):
+            thumbnail = generate_thumbnail_from_pdf(pdf_path, width, height, is_dwg=False)
+            if thumbnail:
+                thumbnail.save(thumb_path, "PNG", optimize=True)
                 thumbnail_path = thumb_path
             extracted_text = extract_text_from_pdf(pdf_path)
             pdf_path.unlink(missing_ok=True)
@@ -394,30 +489,27 @@ def process_file(source_path: Path, temp_dir: Path) -> Tuple[Optional[Path], Opt
     if can_generate_thumbnail(source_path.name):
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
-        if generate_thumbnail(source_path, thumb_path, temp_dir):
+        if generate_thumbnail(source_path, thumb_path, filename, temp_dir):
             thumbnail_path = thumb_path
 
     if can_extract_text(source_path.name):
         extracted_text = extract_text(source_path)
 
     # Fallback: try extracting thumbnail from zip-based formats (any file type)
-    # Works for .idraw, .sketch, .pages, .key, .afdesign, etc.
     if thumbnail_path is None:
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
-        if extract_archive_thumbnail(source_path, thumb_path):
+        if extract_archive_thumbnail(source_path, thumb_path, width, height):
             thumbnail_path = thumb_path
 
     # Fallback: try extracting thumbnail from OLE compound documents
-    # Works for Nova/Trimble files (.n4d, .n4m, .nbup, .nbum)
     if thumbnail_path is None:
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
-        if extract_ole_thumbnail(source_path, thumb_path):
+        if extract_ole_thumbnail(source_path, thumb_path, width, height):
             thumbnail_path = thumb_path
 
     # Fallback: try extracting text from unknown file types
-    # Works for plain text formats like .ifc, .nvtm, etc.
     if extracted_text is None:
         extracted_text = extract_text_fallback(source_path)
 
