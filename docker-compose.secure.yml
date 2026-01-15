@@ -11,6 +11,7 @@
 
 services:
   # TRUSTED: Downloads files from S3, claims jobs from DB
+  # Uses minimal DB role (tte_fetcher) that can ONLY call claim_pending_file_content
   fetcher:
     build:
       context: .
@@ -18,6 +19,9 @@ services:
     container_name: tte-fetcher
     restart: unless-stopped
     environment:
+      # DB: Minimal role (can ONLY claim pending files)
+      - TTE_FETCHER_DB_DSN=${TTE_FETCHER_DB_DSN}
+      # S3: For downloading files (TODO: replace with minimal S3 credentials)
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - STORAGE_BUCKET=${STORAGE_BUCKET:-files}
@@ -63,6 +67,7 @@ services:
       - processor-build
 
   # TRUSTED: Sanitizes and uploads results
+  # Uses minimal DB role (tte_uploader) that can ONLY update specific columns
   uploader:
     build:
       context: .
@@ -70,6 +75,9 @@ services:
     container_name: tte-uploader
     restart: unless-stopped
     environment:
+      # DB: Minimal role (can ONLY update processing results)
+      - TTE_UPLOADER_DB_DSN=${TTE_UPLOADER_DB_DSN}
+      # S3: For uploading thumbnails (TODO: replace with minimal S3 credentials)
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - THUMBNAIL_BUCKET=${THUMBNAIL_BUCKET:-thumbnails}

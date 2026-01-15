@@ -1,13 +1,11 @@
 """Uploader - trusted component that sanitizes and uploads results.
 
 This is a TRUSTED component with:
-- Network access (to reach Supabase/S3)
-- DB credentials (to update records)
+- Network access (to reach S3)
+- Minimal DB credentials (can ONLY update specific columns on file_contents)
 
-Security measures:
-- Re-encodes thumbnails (destroys steganography)
-- Validates output formats and sizes
-- Forwards processor logs to BetterStack
+Security: Uses direct PostgreSQL with tte_uploader role instead of service_role key.
+The tte_uploader role can ONLY UPDATE specific columns - nothing else.
 """
 import json
 import os
@@ -19,15 +17,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+import psycopg
 from PIL import Image
 from logtail import LogtailHandler
 import logging
 from logging.handlers import RotatingFileHandler
 
 # Configuration
+# DB: Minimal role that can ONLY update file_contents results
+DB_DSN = os.environ["TTE_UPLOADER_DB_DSN"]  # postgresql://tte_uploader:xxx@host:5432/db
+
+# S3: For uploading thumbnails (could also use pre-signed URLs for even more security)
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # TODO: Replace with minimal S3 credentials
 THUMBNAIL_BUCKET = os.getenv("THUMBNAIL_BUCKET", "thumbnails")
+
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 BETTERSTACK_TOKEN = os.getenv("BETTERSTACK_SOURCE_TOKEN")
@@ -36,7 +40,7 @@ BETTERSTACK_HOST = os.getenv("BETTERSTACK_INGEST_HOST")
 # Sanitization limits
 MAX_THUMBNAIL_SIZE = 1_000_000  # 1MB
 MAX_TEXT_LENGTH = 51200
-ALLOWED_THUMBNAIL_DIMS = [(400, 300), (800, 600)]
+ALLOWED_THUMBNAIL_DIMS = [(400, 300), (800, 600), (1000, 750)]  # Allow configured sizes
 
 QUEUE_DIR = Path("/queue")
 OUTPUT_DIR = QUEUE_DIR / "output"
@@ -80,22 +84,29 @@ def setup_logging():
 logger = setup_logging()
 processor_logger = logging.getLogger("processor")  # For forwarding processor logs
 
-headers = {
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "apikey": SUPABASE_KEY,
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
+# S3 headers
+s3_headers = {
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "apikey": SUPABASE_SERVICE_KEY,
 }
 
 
 class Uploader:
     def __init__(self):
         self.running = True
-        self.client = httpx.Client(timeout=60.0)
+        self.http_client = httpx.Client(timeout=60.0)
+        self.db_conn = None
 
     def signal_handler(self, signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
+
+    def connect_db(self):
+        """Connect to PostgreSQL with minimal tte_uploader role."""
+        if self.db_conn is None or self.db_conn.closed:
+            self.db_conn = psycopg.connect(DB_DSN)
+            logger.info("Connected to PostgreSQL as tte_uploader")
+        return self.db_conn
 
     def forward_processor_logs(self, log_file: Path, content_hash: str):
         """Forward processor logs to our logging system."""
@@ -116,9 +127,9 @@ class Uploader:
         try:
             img = Image.open(input_path)
             
-            # Validate dimensions
+            # Validate dimensions (warn but allow - config may vary)
             if img.size not in ALLOWED_THUMBNAIL_DIMS:
-                logger.warning(f"Unexpected thumbnail dimensions: {img.size}, allowing anyway")
+                logger.debug(f"Non-standard thumbnail dimensions: {img.size}")
             
             # Validate file size
             if input_path.stat().st_size > MAX_THUMBNAIL_SIZE:
@@ -167,11 +178,11 @@ class Uploader:
             with open(local_path, "rb") as f:
                 data = f.read()
             
-            upload_headers = {**headers, "Content-Type": "image/png"}
-            response = self.client.post(url, content=data, headers=upload_headers)
+            upload_headers = {**s3_headers, "Content-Type": "image/png"}
+            response = self.http_client.post(url, content=data, headers=upload_headers)
             
             if response.status_code == 400 and "already exists" in response.text.lower():
-                response = self.client.put(url, content=data, headers=upload_headers)
+                response = self.http_client.put(url, content=data, headers=upload_headers)
             
             response.raise_for_status()
             return True
@@ -180,49 +191,70 @@ class Uploader:
             logger.error(f"Failed to upload thumbnail: {e}")
             return False
 
-    def update_db(self, content_hash: str, thumbnail_path: str | None, extracted_text: str | None) -> bool:
-        """Update file_contents record."""
+    def update_db_success(self, content_hash: str, thumbnail_path: str | None, extracted_text: str | None) -> bool:
+        """Update file_contents record with success.
+        
+        The tte_uploader role can ONLY update these specific columns.
+        """
         try:
-            url = f"{SUPABASE_URL}/rest/v1/file_contents"
-            params = {"content_hash": f"eq.{content_hash}"}
-            now = datetime.now(timezone.utc).isoformat()
+            conn = self.connect_db()
+            now = datetime.now(timezone.utc)
             
-            data = {
-                "processing_status": "done",
-                "last_status_change": now,
-                "db_updated_at": now,
-            }
-            
-            if thumbnail_path:
-                data["thumbnail_path"] = thumbnail_path
-                data["thumbnail_generated_at"] = now
-            if extracted_text:
-                data["extracted_text"] = extracted_text
-            
-            response = self.client.patch(url, headers=headers, params=params, json=data)
-            response.raise_for_status()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE file_contents SET
+                        processing_status = 'done',
+                        thumbnail_path = COALESCE(%s, thumbnail_path),
+                        thumbnail_generated_at = CASE WHEN %s IS NOT NULL THEN %s ELSE thumbnail_generated_at END,
+                        extracted_text = COALESCE(%s, extracted_text),
+                        last_status_change = %s,
+                        db_updated_at = %s
+                    WHERE content_hash = %s
+                """, (
+                    thumbnail_path,
+                    thumbnail_path, now,
+                    extracted_text,
+                    now, now,
+                    content_hash
+                ))
+            conn.commit()
             return True
             
         except Exception as e:
             logger.error(f"Failed to update DB for {content_hash[:8]}: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
+            self.db_conn = None
             return False
 
-    def mark_failed(self, content_hash: str, try_count: int):
-        """Mark job as failed in DB."""
+    def update_db_failed(self, content_hash: str, try_count: int) -> bool:
+        """Mark job as failed in DB.
+        
+        The tte_uploader role can ONLY update these specific columns.
+        """
         try:
-            url = f"{SUPABASE_URL}/rest/v1/file_contents"
-            params = {"content_hash": f"eq.{content_hash}"}
-            now = datetime.now(timezone.utc).isoformat()
+            conn = self.connect_db()
+            now = datetime.now(timezone.utc)
             status = "error" if try_count >= MAX_RETRIES else "pending"
-            data = {
-                "processing_status": status,
-                "try_count": try_count,
-                "last_status_change": now,
-                "db_updated_at": now,
-            }
-            self.client.patch(url, headers=headers, params=params, json=data)
+            
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE file_contents SET
+                        processing_status = %s,
+                        try_count = %s,
+                        last_status_change = %s,
+                        db_updated_at = %s
+                    WHERE content_hash = %s
+                """, (status, try_count, now, now, content_hash))
+            conn.commit()
+            return True
+            
         except Exception as e:
             logger.error(f"Failed to mark {content_hash[:8]} as failed: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
+            self.db_conn = None
+            return False
 
     def process_done(self, content_hash: str, meta: dict):
         """Process a completed job."""
@@ -235,14 +267,14 @@ class Uploader:
         
         if not result_file.exists():
             logger.error(f"No result.json for {content_hash[:8]}")
-            self.mark_failed(content_hash, meta.get("try_count", 0) + 1)
+            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
             return
         
         result = json.loads(result_file.read_text())
         
         if not result.get("success"):
             logger.warning(f"Processing failed for {content_hash[:8]}: {result.get('error')}")
-            self.mark_failed(content_hash, meta.get("try_count", 0) + 1)
+            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
             self.cleanup_output(content_hash)
             return
         
@@ -265,7 +297,7 @@ class Uploader:
             extracted_text = self.sanitize_text(result["extracted_text"])
         
         # Update DB
-        if self.update_db(content_hash, thumbnail_storage_path, extracted_text):
+        if self.update_db_success(content_hash, thumbnail_storage_path, extracted_text):
             parts = []
             if thumbnail_storage_path:
                 parts.append("thumbnail")
@@ -273,14 +305,14 @@ class Uploader:
                 parts.append(f"text ({len(extracted_text)} chars)")
             logger.info(f"Completed: {meta.get('original_filename', content_hash[:8])} - {', '.join(parts) if parts else 'no output'}")
         else:
-            self.mark_failed(content_hash, meta.get("try_count", 0) + 1)
+            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
         
         self.cleanup_output(content_hash)
 
     def process_failed(self, content_hash: str, error: str, meta: dict):
         """Process a failed job."""
         logger.error(f"Job failed for {content_hash[:8]}: {error}")
-        self.mark_failed(content_hash, meta.get("try_count", 0) + 1)
+        self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
         self.cleanup_output(content_hash)
 
     def cleanup_output(self, content_hash: str):
@@ -293,8 +325,7 @@ class Uploader:
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
-        logger.info("Uploader starting")
-        logger.info(f"Supabase: {SUPABASE_URL}")
+        logger.info("Uploader starting (minimal DB role: tte_uploader)")
         logger.info(f"Thumbnail bucket: {THUMBNAIL_BUCKET}")
 
         while self.running:
@@ -321,7 +352,9 @@ class Uploader:
 
             time.sleep(1)
 
-        self.client.close()
+        if self.db_conn:
+            self.db_conn.close()
+        self.http_client.close()
         logger.info("Uploader stopped")
 
 
@@ -332,4 +365,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

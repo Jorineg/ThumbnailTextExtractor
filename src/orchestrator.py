@@ -173,14 +173,13 @@ class Orchestrator:
             # Copy input to job volume using temporary container
             self.docker.containers.run(
                 "alpine",
-                f"cp /in/input.bin /in/job.json /work/",
+                command=f"sh -c 'cp /in/{content_hash}.bin /work/input.bin && cp /in/{content_hash}.json /work/job.json'",
                 volumes={
                     str(INPUT_DIR): {"bind": "/in", "mode": "ro"},
                     job_vol_name: {"bind": "/work", "mode": "rw"},
                 },
                 remove=True,
                 network_mode="none",
-                command=f"sh -c 'cp /in/{content_hash}.bin /work/input.bin && cp /in/{content_hash}.json /work/job.json'",
             )
 
             # Spawn ephemeral QCAD if needed for this file type

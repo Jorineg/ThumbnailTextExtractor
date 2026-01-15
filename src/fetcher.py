@@ -1,29 +1,36 @@
 """Fetcher - trusted component that downloads files from S3 and claims jobs.
 
 This is a TRUSTED component with:
-- Network access (to reach Supabase/S3)
-- DB credentials (to claim jobs)
+- Network access (to reach S3)
+- Minimal DB credentials (can ONLY call claim_pending_file_content)
 
-It downloads files to a shared volume for the orchestrator to pick up.
+Security: Uses direct PostgreSQL with tte_fetcher role instead of service_role key.
+The tte_fetcher role can ONLY execute claim_pending_file_content - nothing else.
 """
 import json
 import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+import psycopg
 from logtail import LogtailHandler
 import logging
 from logging.handlers import RotatingFileHandler
 
 # Configuration
+# DB: Minimal role that can ONLY claim pending files
+DB_DSN = os.environ["TTE_FETCHER_DB_DSN"]  # postgresql://tte_fetcher:xxx@host:5432/db
+
+# S3: For downloading files (could also use pre-signed URLs for even more security)
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # TODO: Replace with minimal S3 credentials
 STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "files")
+
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 BETTERSTACK_TOKEN = os.getenv("BETTERSTACK_SOURCE_TOKEN")
 BETTERSTACK_HOST = os.getenv("BETTERSTACK_INGEST_HOST")
@@ -71,37 +78,57 @@ def setup_logging():
 
 logger = setup_logging()
 
-headers = {
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "apikey": SUPABASE_KEY,
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
+# S3 headers (still using service key for S3 - TODO: use minimal S3 credentials)
+s3_headers = {
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "apikey": SUPABASE_SERVICE_KEY,
 }
 
 
 class Fetcher:
     def __init__(self):
         self.running = True
-        self.client = httpx.Client(timeout=60.0)
+        self.http_client = httpx.Client(timeout=60.0)
+        self.db_conn = None
 
     def signal_handler(self, signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
 
+    def connect_db(self):
+        """Connect to PostgreSQL with minimal tte_fetcher role."""
+        if self.db_conn is None or self.db_conn.closed:
+            self.db_conn = psycopg.connect(DB_DSN)
+            logger.info("Connected to PostgreSQL as tte_fetcher")
+        return self.db_conn
+
     def claim_job(self) -> dict | None:
-        """Claim one pending job from DB."""
+        """Claim one pending job from DB using minimal role.
+        
+        The tte_fetcher role can ONLY execute this function - nothing else.
+        """
         try:
-            url = f"{SUPABASE_URL}/rest/v1/rpc/claim_pending_file_content"
-            response = self.client.post(url, headers=headers, json={"p_limit": 1})
-            response.raise_for_status()
-            jobs = response.json()
-            return jobs[0] if jobs else None
+            conn = self.connect_db()
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM claim_pending_file_content(1)")
+                row = cur.fetchone()
+                if row:
+                    # Function returns: content_hash, storage_path, size_bytes, try_count, full_path
+                    return {
+                        "content_hash": row[0],
+                        "storage_path": row[1],
+                        "size_bytes": row[2],
+                        "try_count": row[3],
+                        "full_path": row[4],
+                    }
+                return None
         except Exception as e:
             logger.error(f"Failed to claim job: {e}")
+            self.db_conn = None  # Force reconnect
             return None
 
     def download_file(self, job: dict) -> bool:
-        """Download file to input volume."""
+        """Download file from S3 to input volume."""
         content_hash = job["content_hash"]
         storage_path = job["storage_path"]
         full_path = job.get("full_path", storage_path)
@@ -115,7 +142,7 @@ class Fetcher:
 
         try:
             url = f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{storage_path}"
-            with self.client.stream("GET", url, headers=headers) as response:
+            with self.http_client.stream("GET", url, headers=s3_headers) as response:
                 response.raise_for_status()
                 file_path = INPUT_DIR / f"{content_hash}.bin"
                 with open(file_path, "wb") as f:
@@ -142,26 +169,9 @@ class Fetcher:
 
         except Exception as e:
             logger.error(f"Failed to download {content_hash[:8]}: {e}")
-            self.mark_failed(content_hash, job.get("try_count", 0) + 1)
+            # Note: We can't mark failed in DB - tte_fetcher has no UPDATE permission
+            # The job will remain in 'indexing' status and eventually timeout/retry
             return False
-
-    def mark_failed(self, content_hash: str, try_count: int):
-        """Mark job as failed in DB."""
-        try:
-            url = f"{SUPABASE_URL}/rest/v1/file_contents"
-            params = {"content_hash": f"eq.{content_hash}"}
-            now = datetime.now(timezone.utc).isoformat()
-            max_retries = int(os.getenv("MAX_RETRIES", "3"))
-            status = "error" if try_count >= max_retries else "pending"
-            data = {
-                "processing_status": status,
-                "try_count": try_count,
-                "last_status_change": now,
-                "db_updated_at": now,
-            }
-            self.client.patch(url, headers=headers, params=params, json=data)
-        except Exception as e:
-            logger.error(f"Failed to mark {content_hash[:8]} as failed: {e}")
 
     def check_pending_jobs(self) -> int:
         """Check how many jobs are waiting in input dir."""
@@ -171,8 +181,7 @@ class Fetcher:
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
-        logger.info("Fetcher starting")
-        logger.info(f"Supabase: {SUPABASE_URL}")
+        logger.info("Fetcher starting (minimal DB role: tte_fetcher)")
         logger.info(f"Storage bucket: {STORAGE_BUCKET}")
         logger.info(f"Poll interval: {POLL_INTERVAL}s")
 
@@ -194,7 +203,9 @@ class Fetcher:
                         break
                     time.sleep(1)
 
-        self.client.close()
+        if self.db_conn:
+            self.db_conn.close()
+        self.http_client.close()
         logger.info("Fetcher stopped")
 
 
@@ -205,4 +216,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
