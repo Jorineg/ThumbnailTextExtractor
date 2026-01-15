@@ -1,0 +1,129 @@
+# Secure ThumbnailTextExtractor Architecture
+#
+# Security model:
+# - Processor runs in fresh air-gapped container per job (network_mode: none)
+# - Only trusted components (fetcher, uploader) have network/credentials
+# - Orchestrator spawns containers, has no credentials
+# - QCAD also air-gapped, communicates via shared volume
+#
+# Data flow:
+# Fetcher (network) -> INPUT_QUEUE -> Orchestrator -> PROCESSOR (air-gapped) -> OUTPUT_QUEUE -> Uploader (network)
+
+services:
+  # TRUSTED: Downloads files from S3, claims jobs from DB
+  fetcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.trusted
+    container_name: tte-fetcher
+    restart: unless-stopped
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-files}
+      - POLL_INTERVAL=${POLL_INTERVAL:-5}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
+      - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+    volumes:
+      - queue-input:/queue/input
+      - queue-status:/queue/status
+      - ./logs:/app/logs
+    networks:
+      - external
+    command: python -m src.fetcher
+
+  # TRUSTED: Spawns fresh processor containers per job
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.trusted
+    container_name: tte-orchestrator
+    restart: unless-stopped
+    environment:
+      - PROCESSOR_IMAGE=tte-processor:latest
+      - PROCESSOR_RUNTIME=${PROCESSOR_RUNTIME:-runsc}
+      - PROCESSOR_TIMEOUT=${PROCESSOR_TIMEOUT:-600}
+      - PROCESSOR_MEMORY=${PROCESSOR_MEMORY:-2g}
+      - PROCESSOR_CPUS=${PROCESSOR_CPUS:-2}
+      - QCAD_IMAGE=${QCAD_IMAGE:-arjankalfsbeek/qcad:latest}
+      - QCAD_EPHEMERAL=${QCAD_EPHEMERAL:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - queue-input:/queue/input
+      - queue-output:/queue/output
+      - queue-status:/queue/status
+      - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - internal
+    command: python -m src.orchestrator
+    depends_on:
+      - processor-build
+
+  # TRUSTED: Sanitizes and uploads results
+  uploader:
+    build:
+      context: .
+      dockerfile: Dockerfile.trusted
+    container_name: tte-uploader
+    restart: unless-stopped
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - THUMBNAIL_BUCKET=${THUMBNAIL_BUCKET:-thumbnails}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
+      - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
+    volumes:
+      - queue-input:/queue/input:ro
+      - queue-output:/queue/output
+      - queue-status:/queue/status
+      - ./logs:/app/logs
+    networks:
+      - external
+    command: python -m src.uploader
+
+  # Build-only service: creates the processor image
+  processor-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.processor
+    image: tte-processor:latest
+    container_name: tte-processor-build
+    entrypoint: ["echo", "Processor image built"]
+    restart: "no"
+
+  # UNTRUSTED (air-gapped): DWG/DXF conversion via QCAD
+  # NOTE: With QCAD_EPHEMERAL=true (default), this container is NOT used.
+  # Orchestrator spawns fresh QCAD containers per DWG job instead.
+  # Set QCAD_EPHEMERAL=false to use this persistent container (less secure).
+  qcad:
+    image: arjankalfsbeek/qcad:latest
+    container_name: tte-qcad
+    profiles: ["persistent-qcad"]  # Only starts with: docker compose --profile persistent-qcad up
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
+      - dwg-exchange:/dwg-exchange
+      - ./src/qcad_watcher.sh:/watcher.sh:ro
+    entrypoint: ["/bin/sh", "/watcher.sh"]
+
+volumes:
+  queue-input:
+  queue-output:
+  queue-status:
+  dwg-exchange:
+
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
+

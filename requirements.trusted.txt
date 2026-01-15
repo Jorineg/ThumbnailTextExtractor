@@ -1,0 +1,7 @@
+# Dependencies for trusted components (fetcher, uploader, orchestrator)
+python-dotenv>=1.0.0
+httpx>=0.27.0
+logtail-python>=0.3.0
+Pillow>=10.0.0
+docker>=7.0.0
+

@@ -1,0 +1,26 @@
+# Trusted components: fetcher, orchestrator, uploader
+# These have network access and/or credentials
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Docker CLI for orchestrator
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    docker-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.trusted.txt .
+RUN pip install --no-cache-dir -r requirements.trusted.txt
+
+COPY src/fetcher.py ./src/fetcher.py
+COPY src/orchestrator.py ./src/orchestrator.py
+COPY src/uploader.py ./src/uploader.py
+COPY src/__init__.py ./src/__init__.py
+
+RUN mkdir -p /app/logs /queue/input /queue/output /queue/status
+
+ENV PYTHONUNBUFFERED=1
+ENV SERVICE_NAME=thumbnailtextextractor
+
+CMD ["python", "-m", "src.fetcher"]
+

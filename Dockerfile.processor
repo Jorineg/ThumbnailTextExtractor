@@ -1,0 +1,29 @@
+# Air-gapped processor - NO network access, NO credentials
+# This container processes untrusted files in complete isolation
+FROM jorineg/ibhelm-base:latest
+
+# Install processing dependencies (poppler for pdf2image, LibreOffice for Office docs, ffmpeg for video)
+# Note: No docker-cli - this container doesn't need to spawn other containers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    ffmpeg \
+    libreoffice-calc \
+    libreoffice-writer \
+    libreoffice-impress \
+    libreoffice-common \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.processor.txt .
+RUN pip install --no-cache-dir -r requirements.processor.txt
+
+COPY src/processor.py ./src/processor.py
+COPY src/process_job.py ./src/process_job.py
+COPY src/processor_settings.py ./src/processor_settings.py
+
+RUN mkdir -p /work /dwg-exchange
+
+ENV PYTHONUNBUFFERED=1
+
+# Process a single job from /work directory
+CMD ["python", "-m", "src.process_job"]
+
