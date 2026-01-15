@@ -54,6 +54,11 @@ services:
       - QCAD_IMAGE=${QCAD_IMAGE:-arjankalfsbeek/qcad:latest}
       - QCAD_EPHEMERAL=${QCAD_EPHEMERAL:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Docker volume names (must match the volumes: section below)
+      - INPUT_VOLUME=queue-input
+      - OUTPUT_VOLUME=queue-output
+      - STATUS_VOLUME=queue-status
+      - DWG_EXCHANGE_VOLUME=dwg-exchange
     volumes:
       - queue-input:/queue/input
       - queue-output:/queue/output

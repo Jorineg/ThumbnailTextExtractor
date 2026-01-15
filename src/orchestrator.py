@@ -31,6 +31,14 @@ PROCESSOR_CPUS = float(os.getenv("PROCESSOR_CPUS", "2"))
 PROCESSOR_RUNTIME = os.getenv("PROCESSOR_RUNTIME", "runsc")  # runsc (gVisor), kata, or runc (default Docker)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Docker volume names (must match docker-compose volume names)
+# These are the actual Docker volume names, NOT paths inside this container
+INPUT_VOLUME = os.getenv("INPUT_VOLUME", "queue-input")
+OUTPUT_VOLUME = os.getenv("OUTPUT_VOLUME", "queue-output")
+STATUS_VOLUME = os.getenv("STATUS_VOLUME", "queue-status")
+DWG_EXCHANGE_VOLUME = os.getenv("DWG_EXCHANGE_VOLUME", "dwg-exchange")
+
+# Local paths (where volumes are mounted in THIS container)
 QUEUE_DIR = Path("/queue")
 INPUT_DIR = QUEUE_DIR / "input"
 OUTPUT_DIR = QUEUE_DIR / "output"
@@ -71,7 +79,6 @@ class Orchestrator:
     def __init__(self):
         self.running = True
         self.docker = docker.from_env()
-        self.dwg_exchange_vol = "dwg-exchange"
         self.qcad_container = None  # For persistent mode
 
     def signal_handler(self, signum, frame):
@@ -89,13 +96,14 @@ class Orchestrator:
                 pass
             self.qcad_container = None
 
-    def ensure_dwg_exchange(self):
-        """Ensure the DWG exchange volume exists."""
-        try:
-            self.docker.volumes.get(self.dwg_exchange_vol)
-        except docker.errors.NotFound:
-            self.docker.volumes.create(self.dwg_exchange_vol)
-            logger.info(f"Created volume: {self.dwg_exchange_vol}")
+    def ensure_volumes(self):
+        """Ensure required Docker volumes exist."""
+        for vol_name in [INPUT_VOLUME, OUTPUT_VOLUME, STATUS_VOLUME, DWG_EXCHANGE_VOLUME]:
+            try:
+                self.docker.volumes.get(vol_name)
+            except docker.errors.NotFound:
+                self.docker.volumes.create(vol_name)
+                logger.info(f"Created volume: {vol_name}")
 
     def needs_qcad(self, filename: str) -> bool:
         """Check if file needs QCAD for conversion."""
@@ -111,7 +119,7 @@ class Orchestrator:
             "mem_limit": "1g",
             "pids_limit": 100,
             "volumes": {
-                self.dwg_exchange_vol: {"bind": "/dwg-exchange", "mode": "rw"},
+                DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
             },
             "tmpfs": {"/tmp": "size=256m,mode=1777"},
             "entrypoint": ["/bin/sh", "-c"],
@@ -171,11 +179,12 @@ class Orchestrator:
             logger.debug(f"Created volume: {job_vol_name}")
 
             # Copy input to job volume using temporary container
+            # NOTE: Use Docker volume names, not paths (spawned container can't see our filesystem)
             self.docker.containers.run(
                 "alpine",
                 command=f"sh -c 'cp /in/{content_hash}.bin /work/input.bin && cp /in/{content_hash}.json /work/job.json'",
                 volumes={
-                    str(INPUT_DIR): {"bind": "/in", "mode": "ro"},
+                    INPUT_VOLUME: {"bind": "/in", "mode": "ro"},
                     job_vol_name: {"bind": "/work", "mode": "rw"},
                 },
                 remove=True,
@@ -199,7 +208,7 @@ class Orchestrator:
                 "pids_limit": 200,
                 "volumes": {
                     job_vol_name: {"bind": "/work", "mode": "rw"},
-                    self.dwg_exchange_vol: {"bind": "/dwg-exchange", "mode": "rw"},
+                    DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
                 },
                 "tmpfs": {"/tmp": "size=512m,mode=1777"},
             }
@@ -247,7 +256,7 @@ class Orchestrator:
                 command="sh -c 'cp -r /work/* /out/ 2>/dev/null || true'",
                 volumes={
                     job_vol_name: {"bind": "/work", "mode": "ro"},
-                    str(OUTPUT_DIR): {"bind": "/out", "mode": "rw"},
+                    OUTPUT_VOLUME: {"bind": "/out", "mode": "rw"},
                 },
                 remove=True,
                 network_mode="none",
@@ -298,7 +307,7 @@ class Orchestrator:
                 self.docker.containers.run(
                     "alpine",
                     command=f"sh -c 'rm -f /dwg-exchange/{content_hash[:12]}*'",
-                    volumes={self.dwg_exchange_vol: {"bind": "/dwg-exchange", "mode": "rw"}},
+                    volumes={DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"}},
                     remove=True,
                     network_mode="none",
                 )
@@ -315,7 +324,7 @@ class Orchestrator:
         logger.info(f"Processor timeout: {PROCESSOR_TIMEOUT}s")
         logger.info(f"Processor limits: {PROCESSOR_MEMORY} RAM, {PROCESSOR_CPUS} CPUs")
 
-        self.ensure_dwg_exchange()
+        self.ensure_volumes()
 
         while self.running:
             # Find ready jobs
