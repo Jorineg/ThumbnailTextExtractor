@@ -113,6 +113,26 @@ class Orchestrator:
 
     def spawn_qcad_for_job(self, job_vol_name: str) -> docker.models.containers.Container | None:
         """Spawn ephemeral QCAD container for this job with gVisor/Kata isolation."""
+        # QCAD watcher script - watches for .convert files and processes them
+        qcad_script = """
+echo 'QCAD watcher starting...'
+while true; do
+    for f in /dwg-exchange/*.convert; do
+        [ -e "$f" ] || continue
+        job_id=$(basename "$f" .convert)
+        dwg=$(cat "$f")
+        echo "Converting: $dwg"
+        /exec/qcad/dwg2pdf -a -auto-orientation -f -o "/dwg-exchange/${job_id}.pdf" "/dwg-exchange/$dwg" 2>&1
+        if [ $? -eq 0 ] && [ -f "/dwg-exchange/${job_id}.pdf" ]; then
+            touch "/dwg-exchange/${job_id}.done"
+        else
+            echo "Conversion failed" > "/dwg-exchange/${job_id}.failed"
+        fi
+        rm -f "$f"
+    done
+    sleep 0.5
+done
+"""
         qcad_run_kwargs = {
             "detach": True,
             "network_mode": "none",
@@ -123,26 +143,8 @@ class Orchestrator:
                 DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
             },
             "tmpfs": {"/tmp": "size=256m,mode=1777"},
-            "entrypoint": ["/bin/sh", "-c"],
-            "command": """
-                echo 'QCAD watcher starting...'
-                while true; do
-                    for f in /dwg-exchange/*.convert; do
-                        [ -e "$f" ] || continue
-                        job_id=$(basename "$f" .convert)
-                        dwg=$(cat "$f")
-                        echo "Converting: $dwg"
-                        /exec/qcad/dwg2pdf -a -auto-orientation -f -o "/dwg-exchange/${job_id}.pdf" "/dwg-exchange/$dwg" 2>&1
-                        if [ $? -eq 0 ] && [ -f "/dwg-exchange/${job_id}.pdf" ]; then
-                            touch "/dwg-exchange/${job_id}.done"
-                        else
-                            echo "Conversion failed" > "/dwg-exchange/${job_id}.failed"
-                        fi
-                        rm -f "$f"
-                    done
-                    sleep 0.5
-                done
-            """,
+            # Pass script as single argument to sh -c
+            "command": ["/bin/sh", "-c", qcad_script],
         }
         
         # IMPORTANT: Use same gVisor/Kata runtime as processor for kernel isolation
