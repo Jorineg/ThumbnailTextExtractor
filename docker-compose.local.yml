@@ -1,7 +1,8 @@
 services:
   thumbnail-extractor:
     build: .
-    container_name: thumbnail-text-extractor-local
+    # container_name: thumbnail-text-extractor
+    restart: unless-stopped
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
@@ -9,12 +10,35 @@ services:
       - THUMBNAIL_BUCKET=${THUMBNAIL_BUCKET:-thumbnails}
       - THUMBNAIL_WIDTH=${THUMBNAIL_WIDTH:-400}
       - THUMBNAIL_HEIGHT=${THUMBNAIL_HEIGHT:-300}
+      - THUMBNAIL_LARGE_WIDTH=${THUMBNAIL_LARGE_WIDTH:-800}
+      - THUMBNAIL_LARGE_HEIGHT=${THUMBNAIL_LARGE_HEIGHT:-600}
+      - THUMBNAIL_SMALL_EXTENSIONS=${THUMBNAIL_SMALL_EXTENSIONS:-pdf,png,jpg,jpeg,heic,heif,gif}
+      - THUMBNAIL_CROP_POSITION=${THUMBNAIL_CROP_POSITION:-top}
+      - DWG_INTERMEDIATE_DPI=${DWG_INTERMEDIATE_DPI:-600}
+      - DWG_WHITE_THRESHOLD=${DWG_WHITE_THRESHOLD:-250}
       - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-51200}
       - POLL_INTERVAL=${POLL_INTERVAL:-5}
       - MAX_RETRIES=${MAX_RETRIES:-3}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
+      - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
+      - QCAD_CONTAINER=qcad
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
-      - ./src:/app/src:ro
+      - dwg-exchange:/dwg-exchange
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - qcad
+
+  qcad:
+    image: arjankalfsbeek/qcad:latest
+    container_name: qcad
+    restart: unless-stopped
+    entrypoint: ["tail", "-f", "/dev/null"]
+    volumes:
+      - dwg-exchange:/dwg-exchange
+
+volumes:
+  dwg-exchange:
 

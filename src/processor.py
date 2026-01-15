@@ -260,12 +260,132 @@ def find_content_bounds(img: Image.Image, threshold: int = 250) -> Tuple[int, in
     return left, top, right, bottom
 
 
+def find_gap_splits(has_content: np.ndarray, gap_threshold_ratio: float = 0.15) -> list[int]:
+    """
+    Find indices where large gaps split the content into regions.
+    Returns split points (start of each region after the first).
+    """
+    if not has_content.any():
+        return []
+    
+    # Find content extent
+    first = np.argmax(has_content)
+    last = len(has_content) - np.argmax(has_content[::-1])
+    content_span = last - first
+    
+    if content_span <= 0:
+        return []
+    
+    gap_threshold = int(content_span * gap_threshold_ratio)
+    if gap_threshold < 10:  # Minimum gap size to consider
+        return []
+    
+    # Find gaps within the content region
+    splits = []
+    in_gap = False
+    gap_start = 0
+    
+    for i in range(first, last):
+        if not has_content[i]:
+            if not in_gap:
+                in_gap = True
+                gap_start = i
+        else:
+            if in_gap:
+                gap_size = i - gap_start
+                if gap_size >= gap_threshold:
+                    splits.append(i)  # Split point is where content resumes
+                in_gap = False
+    
+    return splits
+
+
+def find_regions_from_splits(has_content: np.ndarray, splits: list[int]) -> list[Tuple[int, int]]:
+    """Convert split points into (start, end) regions."""
+    if not has_content.any():
+        return []
+    
+    first = np.argmax(has_content)
+    last = len(has_content) - np.argmax(has_content[::-1])
+    
+    if not splits:
+        return [(first, last)]
+    
+    regions = []
+    prev = first
+    for split in splits:
+        # Find actual content end before the gap
+        region_end = split
+        while region_end > prev and not has_content[region_end - 1]:
+            region_end -= 1
+        if region_end > prev:
+            regions.append((prev, region_end))
+        prev = split
+    
+    # Last region
+    if prev < last:
+        regions.append((prev, last))
+    
+    return regions
+
+
+def find_largest_content_region(img: Image.Image, threshold: int = 250) -> Tuple[int, int, int, int]:
+    """
+    Find the largest contiguous content region, handling internal gaps.
+    DWG files often have drawing + title block with large gaps between them.
+    This finds and returns the region with the most content.
+    """
+    gray = img.convert("L")
+    arr = np.array(gray)
+    non_white = arr < threshold
+    
+    if not non_white.any():
+        return 0, 0, img.width, img.height
+    
+    # Get content projection on rows and columns
+    row_has_content = np.any(non_white, axis=1)
+    col_has_content = np.any(non_white, axis=0)
+    
+    # Find splits in both dimensions
+    row_splits = find_gap_splits(row_has_content)
+    col_splits = find_gap_splits(col_has_content)
+    
+    # Get regions
+    row_regions = find_regions_from_splits(row_has_content, row_splits)
+    col_regions = find_regions_from_splits(col_has_content, col_splits)
+    
+    if not row_regions or not col_regions:
+        return find_content_bounds(img, threshold)
+    
+    # If no splits found, use original bounds
+    if len(row_regions) == 1 and len(col_regions) == 1:
+        return find_content_bounds(img, threshold)
+    
+    # Find region combination with most content
+    best_region = None
+    best_content = 0
+    
+    for (row_start, row_end) in row_regions:
+        for (col_start, col_end) in col_regions:
+            # Count non-white pixels in this region
+            region_content = np.sum(non_white[row_start:row_end, col_start:col_end])
+            if region_content > best_content:
+                best_content = region_content
+                best_region = (col_start, row_start, col_end, row_end)
+    
+    if best_region is None:
+        return find_content_bounds(img, threshold)
+    
+    logger.debug(f"Content region analysis: {len(row_regions)} row regions, {len(col_regions)} col regions, selected {best_region}")
+    return best_region
+
+
 def crop_to_content(img: Image.Image, margin_ratio: float = 0.02) -> Image.Image:
     """
-    Crop image to content bounds with a small margin.
-    Used for DWG files where content may be in a corner of the page.
+    Crop image to the largest content region with a small margin.
+    Handles DWG files where content may be scattered with large internal gaps.
     """
-    left, top, right, bottom = find_content_bounds(img, settings.DWG_WHITE_THRESHOLD)
+    left, top, right, bottom = find_largest_content_region(img, settings.DWG_WHITE_THRESHOLD)
     
     content_width = right - left
     content_height = bottom - top
