@@ -31,8 +31,8 @@ services:
       - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
       - MAX_RETRIES=${MAX_RETRIES:-3}
     volumes:
-      - queue-input:/queue/input
-      - queue-status:/queue/status
+      - tte-queue-input:/queue/input
+      - tte-queue-status:/queue/status
       - ./logs:/app/logs
     networks:
       - external
@@ -54,15 +54,16 @@ services:
       - QCAD_IMAGE=${QCAD_IMAGE:-arjankalfsbeek/qcad:latest}
       - QCAD_EPHEMERAL=${QCAD_EPHEMERAL:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # Docker volume names (must match the volumes: section below)
-      - INPUT_VOLUME=queue-input
-      - OUTPUT_VOLUME=queue-output
-      - STATUS_VOLUME=queue-status
-      - DWG_EXCHANGE_VOLUME=dwg-exchange
+      # Docker volume names - these are the ACTUAL names used by Docker
+      # (using external volumes to avoid compose project name prefix)
+      - INPUT_VOLUME=tte-queue-input
+      - OUTPUT_VOLUME=tte-queue-output
+      - STATUS_VOLUME=tte-queue-status
+      - DWG_EXCHANGE_VOLUME=tte-dwg-exchange
     volumes:
-      - queue-input:/queue/input
-      - queue-output:/queue/output
-      - queue-status:/queue/status
+      - tte-queue-input:/queue/input
+      - tte-queue-output:/queue/output
+      - tte-queue-status:/queue/status
       - ./logs:/app/logs
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -91,9 +92,9 @@ services:
       - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
       - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
     volumes:
-      - queue-input:/queue/input:ro
-      - queue-output:/queue/output
-      - queue-status:/queue/status
+      - tte-queue-input:/queue/input:ro
+      - tte-queue-output:/queue/output
+      - tte-queue-status:/queue/status
       - ./logs:/app/logs
     networks:
       - external
@@ -123,15 +124,22 @@ services:
     tmpfs:
       - /tmp:size=512m,mode=1777
     volumes:
-      - dwg-exchange:/dwg-exchange
+      - tte-dwg-exchange:/dwg-exchange
       - ./src/qcad_watcher.sh:/watcher.sh:ro
     entrypoint: ["/bin/sh", "/watcher.sh"]
 
+# External volumes with explicit names (no compose project prefix)
+# These must be created before starting: docker volume create tte-queue-input etc.
+# Or use: docker compose up (compose will create them automatically as external: false)
 volumes:
-  queue-input:
-  queue-output:
-  queue-status:
-  dwg-exchange:
+  tte-queue-input:
+    name: tte-queue-input
+  tte-queue-output:
+    name: tte-queue-output
+  tte-queue-status:
+    name: tte-queue-status
+  tte-dwg-exchange:
+    name: tte-dwg-exchange
 
 networks:
   external:
@@ -139,4 +147,3 @@ networks:
   internal:
     driver: bridge
     internal: true
-

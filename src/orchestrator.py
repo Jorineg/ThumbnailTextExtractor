@@ -33,10 +33,11 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Docker volume names (must match docker-compose volume names)
 # These are the actual Docker volume names, NOT paths inside this container
-INPUT_VOLUME = os.getenv("INPUT_VOLUME", "queue-input")
-OUTPUT_VOLUME = os.getenv("OUTPUT_VOLUME", "queue-output")
-STATUS_VOLUME = os.getenv("STATUS_VOLUME", "queue-status")
-DWG_EXCHANGE_VOLUME = os.getenv("DWG_EXCHANGE_VOLUME", "dwg-exchange")
+# Using explicit names with tte- prefix to avoid compose project name issues
+INPUT_VOLUME = os.getenv("INPUT_VOLUME", "tte-queue-input")
+OUTPUT_VOLUME = os.getenv("OUTPUT_VOLUME", "tte-queue-output")
+STATUS_VOLUME = os.getenv("STATUS_VOLUME", "tte-queue-status")
+DWG_EXCHANGE_VOLUME = os.getenv("DWG_EXCHANGE_VOLUME", "tte-dwg-exchange")
 
 # Local paths (where volumes are mounted in THIS container)
 QUEUE_DIR = Path("/queue")
