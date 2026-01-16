@@ -137,15 +137,17 @@ done
             "detach": True,
             "network_mode": "none",
             "read_only": True,
-            "mem_limit": "1g",
+            "mem_limit": "4g",  # QCAD needs lots of memory for large DWG files
             "pids_limit": 100,
             "volumes": {
                 DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
             },
-            "tmpfs": {"/tmp": "size=256m,mode=1777"},
+            "tmpfs": {"/tmp": "size=512m,mode=1777"},
             # Pass script as single argument to sh -c
             "command": ["/bin/sh", "-c", qcad_script],
         }
+        
+        logger.info(f"Spawning QCAD container for DWG conversion...")
         
         # IMPORTANT: Use same gVisor/Kata runtime as processor for kernel isolation
         # QCAD is also untrusted (processes potentially malicious DWG files)
@@ -213,7 +215,11 @@ done
                     job_vol_name: {"bind": "/work", "mode": "rw"},
                     DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
                 },
-                "tmpfs": {"/tmp": "size=512m,mode=1777"},
+                "tmpfs": {
+                    "/tmp": "size=512m,mode=1777",
+                    "/root/.cache": "size=64m,mode=0700",   # For dconf (LibreOffice)
+                    "/root/.config": "size=64m,mode=0700",  # For LibreOffice user profile
+                },
             }
             
             # Use gVisor/Kata runtime for kernel-level isolation

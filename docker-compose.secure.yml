@@ -36,6 +36,7 @@ services:
       - ./logs:/app/logs
     networks:
       - external
+      - supabase_default  # For DB/S3 access via DNS
     command: python -m src.fetcher
 
   # TRUSTED: Spawns fresh processor containers per job
@@ -98,6 +99,7 @@ services:
       - ./logs:/app/logs
     networks:
       - external
+      - supabase_default  # For DB/S3 access via DNS
     command: python -m src.uploader
 
   # Build-only service: creates the processor image
@@ -147,3 +149,5 @@ networks:
   internal:
     driver: bridge
     internal: true
+  supabase_default:
+    external: true  # Assumes supabase network already exists

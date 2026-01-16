@@ -195,28 +195,52 @@ class Uploader:
         """Update file_contents record with success.
         
         The tte_uploader role can ONLY update these specific columns.
+        Split into separate queries to avoid psycopg type inference issues.
         """
         try:
             conn = self.connect_db()
             now = datetime.now(timezone.utc)
             
             with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE file_contents SET
-                        processing_status = 'done',
-                        thumbnail_path = COALESCE(%s, thumbnail_path),
-                        thumbnail_generated_at = CASE WHEN %s IS NOT NULL THEN %s ELSE thumbnail_generated_at END,
-                        extracted_text = COALESCE(%s, extracted_text),
-                        last_status_change = %s,
-                        db_updated_at = %s
-                    WHERE content_hash = %s
-                """, (
-                    thumbnail_path,
-                    thumbnail_path, now,
-                    extracted_text,
-                    now, now,
-                    content_hash
-                ))
+                # Use separate queries to avoid psycopg type inference issues with COALESCE/CASE
+                if thumbnail_path and extracted_text:
+                    cur.execute("""
+                        UPDATE file_contents SET
+                            processing_status = 'done',
+                            thumbnail_path = %s,
+                            thumbnail_generated_at = %s,
+                            extracted_text = %s,
+                            last_status_change = %s,
+                            db_updated_at = %s
+                        WHERE content_hash = %s
+                    """, (thumbnail_path, now, extracted_text, now, now, content_hash))
+                elif thumbnail_path:
+                    cur.execute("""
+                        UPDATE file_contents SET
+                            processing_status = 'done',
+                            thumbnail_path = %s,
+                            thumbnail_generated_at = %s,
+                            last_status_change = %s,
+                            db_updated_at = %s
+                        WHERE content_hash = %s
+                    """, (thumbnail_path, now, now, now, content_hash))
+                elif extracted_text:
+                    cur.execute("""
+                        UPDATE file_contents SET
+                            processing_status = 'done',
+                            extracted_text = %s,
+                            last_status_change = %s,
+                            db_updated_at = %s
+                        WHERE content_hash = %s
+                    """, (extracted_text, now, now, content_hash))
+                else:
+                    cur.execute("""
+                        UPDATE file_contents SET
+                            processing_status = 'done',
+                            last_status_change = %s,
+                            db_updated_at = %s
+                        WHERE content_hash = %s
+                    """, (now, now, content_hash))
             conn.commit()
             return True
             
@@ -334,21 +358,31 @@ class Uploader:
                 if not self.running:
                     break
                 content_hash = done_file.stem
-                meta = json.loads(done_file.read_text())
-                done_file.unlink()
-                self.process_done(content_hash, meta)
+                logger.info(f"Processing done: {content_hash[:8]}")
+                try:
+                    meta = json.loads(done_file.read_text())
+                    done_file.unlink()
+                    self.process_done(content_hash, meta)
+                except Exception as e:
+                    logger.error(f"Error processing done file {content_hash[:8]}: {e}", exc_info=True)
+                    done_file.unlink(missing_ok=True)
 
             # Process failed jobs
             for failed_file in STATUS_DIR.glob("*.failed"):
                 if not self.running:
                     break
                 content_hash = failed_file.stem
-                error = failed_file.read_text()
-                failed_file.unlink()
-                # Try to load meta from input dir (might not exist)
-                meta_file = QUEUE_DIR / "input" / f"{content_hash}.json"
-                meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
-                self.process_failed(content_hash, error, meta)
+                logger.info(f"Processing failed: {content_hash[:8]}")
+                try:
+                    error = failed_file.read_text()
+                    failed_file.unlink()
+                    # Try to load meta from input dir (might not exist)
+                    meta_file = QUEUE_DIR / "input" / f"{content_hash}.json"
+                    meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+                    self.process_failed(content_hash, error, meta)
+                except Exception as e:
+                    logger.error(f"Error processing failed file {content_hash[:8]}: {e}", exc_info=True)
+                    failed_file.unlink(missing_ok=True)
 
             time.sleep(1)
 
