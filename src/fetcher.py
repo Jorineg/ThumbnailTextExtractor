@@ -112,16 +112,17 @@ class Fetcher:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM claim_pending_file_content(1)")
                 row = cur.fetchone()
-                if row:
-                    # Function returns: content_hash, storage_path, size_bytes, try_count, full_path
-                    return {
-                        "content_hash": row[0],
-                        "storage_path": row[1],
-                        "size_bytes": row[2],
-                        "try_count": row[3],
-                        "full_path": row[4],
-                    }
-                return None
+            conn.commit()  # Release transaction lock - prevents blocking uploader UPDATEs
+            if row:
+                # Function returns: content_hash, storage_path, size_bytes, try_count, full_path
+                return {
+                    "content_hash": row[0],
+                    "storage_path": row[1],
+                    "size_bytes": row[2],
+                    "try_count": row[3],
+                    "full_path": row[4],
+                }
+            return None
         except Exception as e:
             logger.error(f"Failed to claim job: {e}")
             self.db_conn = None  # Force reconnect
