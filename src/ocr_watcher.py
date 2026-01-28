@@ -29,11 +29,14 @@ import time
 from pathlib import Path
 
 import easyocr
+import numpy as np
+from PIL import Image
 
 # Configuration
 OCR_EXCHANGE_DIR = Path(os.getenv("OCR_EXCHANGE_DIR", "/ocr-exchange"))
 WORDLIST_PATH = Path(os.getenv("WORDLIST_PATH", "/app/wordlists/combined.txt"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+MAX_IMAGE_DIMENSION = int(os.getenv("MAX_IMAGE_DIMENSION", "2500"))  # Resize images larger than this
 
 # Setup logging
 logging.basicConfig(
@@ -85,6 +88,33 @@ class OCRWatcher:
         recognized = sum(1 for w in checkable if w in self.wordlist)
         return recognized / len(checkable)
 
+    def preprocess_image(self, image_path: Path) -> np.ndarray:
+        """Load and optionally resize image to reduce memory usage.
+        
+        Returns numpy array suitable for EasyOCR.
+        """
+        img = Image.open(image_path)
+        original_size = img.size
+        
+        # Convert to RGB if necessary (EasyOCR works best with RGB)
+        if img.mode == 'RGBA':
+            # Create white background and paste image
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Check if resize is needed
+        max_dim = max(img.size)
+        if max_dim > MAX_IMAGE_DIMENSION:
+            scale = MAX_IMAGE_DIMENSION / max_dim
+            new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            logger.debug(f"Resized image from {original_size} to {new_size}")
+        
+        return np.array(img)
+
     def process_request(self, request_file: Path) -> bool:
         """Process a single OCR request."""
         job_id = request_file.stem
@@ -101,8 +131,11 @@ class OCRWatcher:
             logger.info(f"Processing OCR: {image_filename}")
             start = time.time()
 
-            # Run OCR
-            results = self.reader.readtext(str(image_path))
+            # Load and preprocess image (resize if too large)
+            image_array = self.preprocess_image(image_path)
+            
+            # Run OCR on the preprocessed image array
+            results = self.reader.readtext(image_array)
 
             # Extract text and compute confidence
             texts = []
