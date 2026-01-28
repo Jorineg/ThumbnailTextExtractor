@@ -38,6 +38,7 @@ INPUT_VOLUME = os.getenv("INPUT_VOLUME", "tte-queue-input")
 OUTPUT_VOLUME = os.getenv("OUTPUT_VOLUME", "tte-queue-output")
 STATUS_VOLUME = os.getenv("STATUS_VOLUME", "tte-queue-status")
 DWG_EXCHANGE_VOLUME = os.getenv("DWG_EXCHANGE_VOLUME", "tte-dwg-exchange")
+OCR_EXCHANGE_VOLUME = os.getenv("OCR_EXCHANGE_VOLUME", "tte-ocr-exchange")
 
 # Local paths (where volumes are mounted in THIS container)
 QUEUE_DIR = Path("/queue")
@@ -99,7 +100,7 @@ class Orchestrator:
 
     def ensure_volumes(self):
         """Ensure required Docker volumes exist."""
-        for vol_name in [INPUT_VOLUME, OUTPUT_VOLUME, STATUS_VOLUME, DWG_EXCHANGE_VOLUME]:
+        for vol_name in [INPUT_VOLUME, OUTPUT_VOLUME, STATUS_VOLUME, DWG_EXCHANGE_VOLUME, OCR_EXCHANGE_VOLUME]:
             try:
                 self.docker.volumes.get(vol_name)
             except docker.errors.NotFound:
@@ -214,6 +215,7 @@ done
                 "volumes": {
                     job_vol_name: {"bind": "/work", "mode": "rw"},
                     DWG_EXCHANGE_VOLUME: {"bind": "/dwg-exchange", "mode": "rw"},
+                    OCR_EXCHANGE_VOLUME: {"bind": "/ocr-exchange", "mode": "rw"},
                 },
                 "tmpfs": {
                     "/tmp": "size=512m,mode=1777",

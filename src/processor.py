@@ -495,6 +495,141 @@ def extract_text_from_pdf(source_path: Path) -> Optional[str]:
         return None
 
 
+def extract_text_from_pdf_page(source_path: Path, page_num: int = 0) -> Optional[str]:
+    """Extract text from a specific PDF page."""
+    try:
+        doc = fitz.open(source_path)
+        if page_num >= len(doc):
+            doc.close()
+            return None
+        text = doc[page_num].get_text()
+        doc.close()
+        return text.replace('\x00', '') if text.strip() else None
+    except Exception as e:
+        logger.debug(f"Failed to extract text from page {page_num}: {e}")
+        return None
+
+
+def render_pdf_page_to_image(source_path: Path, page_num: int = 0, dpi: int = 200) -> Optional[Path]:
+    """Render a PDF page to an image file for OCR."""
+    try:
+        images = convert_from_path(str(source_path), first_page=page_num + 1, 
+                                   last_page=page_num + 1, dpi=dpi)
+        if not images:
+            return None
+        
+        # Save to temp file
+        temp_path = source_path.parent / f"ocr_page_{page_num}_{uuid.uuid4()}.png"
+        images[0].save(temp_path, "PNG")
+        return temp_path
+    except Exception as e:
+        logger.debug(f"Failed to render PDF page {page_num} to image: {e}")
+        return None
+
+
+def ocr_image(image_path: Path) -> Optional[dict]:
+    """Request OCR for an image via the OCR sidecar."""
+    try:
+        from src.ocr_client import request_ocr
+        return request_ocr(image_path)
+    except ImportError:
+        logger.debug("OCR client not available")
+        return None
+    except Exception as e:
+        logger.error(f"OCR request failed: {e}")
+        return None
+
+
+def process_pdf_with_ocr(source_path: Path, original_extension: str) -> Optional[str]:
+    """
+    Process PDF text extraction with OCR quality comparison.
+    
+    1. Extract embedded text from all pages
+    2. If original was DWG/Office, skip OCR (text is always good)
+    3. Otherwise, OCR page 1 and compare quality
+    4. If OCR is better, run OCR on all pages
+    """
+    try:
+        from src.ocr_client import needs_ocr_check, should_use_ocr, get_final_text
+    except ImportError:
+        logger.debug("OCR client not available, using embedded text only")
+        return extract_text_from_pdf(source_path)
+    
+    # Get embedded text
+    embedded_text = extract_text_from_pdf(source_path)
+    
+    # Skip OCR check for generated PDFs (DWG, Office conversions)
+    if not needs_ocr_check(original_extension):
+        logger.debug(f"Skipping OCR check for generated PDF (from {original_extension})")
+        return embedded_text
+    
+    # Get embedded text from page 1 for comparison
+    page1_embedded = extract_text_from_pdf_page(source_path, 0)
+    
+    # Render page 1 to image and run OCR
+    page1_image = render_pdf_page_to_image(source_path, 0)
+    if not page1_image:
+        logger.debug("Could not render PDF page for OCR comparison")
+        return embedded_text
+    
+    try:
+        ocr_result = ocr_image(page1_image)
+    finally:
+        page1_image.unlink(missing_ok=True)
+    
+    if not ocr_result:
+        logger.debug("OCR comparison failed, using embedded text")
+        return embedded_text
+    
+    # Decide if we should use OCR
+    use_ocr, reason = should_use_ocr(page1_embedded, ocr_result)
+    logger.info(f"OCR decision: {reason} (embedded={len(page1_embedded or '')} chars, "
+                f"ocr={ocr_result.get('char_count', 0)} chars, quality={ocr_result.get('quality', 0):.2f})")
+    
+    if not use_ocr:
+        return embedded_text
+    
+    # OCR is better - run on all pages
+    logger.info("Running OCR on all PDF pages...")
+    doc = fitz.open(source_path)
+    page_count = len(doc)
+    doc.close()
+    
+    ocr_texts = []
+    for page_num in range(page_count):
+        page_image = render_pdf_page_to_image(source_path, page_num)
+        if page_image:
+            try:
+                page_ocr = ocr_image(page_image)
+                if page_ocr and page_ocr.get("text"):
+                    ocr_texts.append(page_ocr["text"])
+            finally:
+                page_image.unlink(missing_ok=True)
+    
+    full_ocr_text = "\n\n".join(ocr_texts) if ocr_texts else ""
+    
+    # Get final text (may concatenate both)
+    final_text = get_final_text(embedded_text, {"text": full_ocr_text}, reason)
+    
+    if len(final_text) > settings.MAX_TEXT_LENGTH:
+        final_text = final_text[:settings.MAX_TEXT_LENGTH]
+    
+    logger.info(f"OCR complete: {len(final_text)} chars from {page_count} pages")
+    return final_text if final_text.strip() else None
+
+
+def process_image_with_ocr(source_path: Path) -> Optional[str]:
+    """Run OCR on an image file."""
+    ocr_result = ocr_image(source_path)
+    if ocr_result and ocr_result.get("text"):
+        text = ocr_result["text"]
+        if len(text) > settings.MAX_TEXT_LENGTH:
+            text = text[:settings.MAX_TEXT_LENGTH]
+        logger.info(f"Image OCR: {len(text)} chars, quality={ocr_result.get('quality', 0):.2f}")
+        return text
+    return None
+
+
 def extract_text_from_file(source_path: Path) -> Optional[str]:
     try:
         try:
@@ -557,14 +692,16 @@ def extract_text_fallback(source_path: Path) -> Optional[str]:
         return None
 
 
-def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[str] = None) -> Tuple[Optional[Path], Optional[str]]:
-    """Process a file: generate thumbnail and extract text."""
+def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[str] = None, 
+                  original_extension: Optional[str] = None) -> Tuple[Optional[Path], Optional[str]]:
+    """Process a file: generate thumbnail and extract text (with OCR when appropriate)."""
     thumbnail_path = None
     extracted_text = None
     filename = original_filename or source_path.name
+    orig_ext = original_extension or get_file_extension(filename)
     width, height = get_thumbnail_dimensions(filename)
 
-    # DWG: convert once, use for both
+    # DWG: convert once, use for both (no OCR needed - generated PDF has perfect text)
     if is_dwg(source_path.name):
         pdf_path = convert_dwg_to_pdf(source_path)
         if pdf_path:
@@ -578,7 +715,7 @@ def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[
             pdf_path.unlink(missing_ok=True)
         return thumbnail_path, extracted_text
 
-    # Office: convert to PDF, then process
+    # Office: convert to PDF, then process (no OCR needed - generated PDF has perfect text)
     if is_office(source_path.name):
         pdf_path = convert_office_to_pdf(source_path, temp_dir)
         if pdf_path:
@@ -592,7 +729,7 @@ def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[
             pdf_path.unlink(missing_ok=True)
         return thumbnail_path, extracted_text
 
-    # SVG: convert via cairosvg
+    # SVG: convert via cairosvg (no text to extract)
     if is_svg(source_path.name):
         img = convert_svg_to_image(source_path, width)
         if img:
@@ -603,7 +740,7 @@ def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[
             thumbnail_path = thumb_path
         return thumbnail_path, None
 
-    # Video: extract frame
+    # Video: extract frame (no text to extract)
     if is_video(source_path.name):
         frame_path = extract_video_frame(source_path, temp_dir)
         if frame_path:
@@ -618,24 +755,38 @@ def process_file(source_path: Path, temp_dir: Path, original_filename: Optional[
             frame_path.unlink(missing_ok=True)
         return thumbnail_path, None
 
-    # Standard processing
-    if can_generate_thumbnail(source_path.name):
+    # Images: generate thumbnail AND run OCR
+    if is_image(source_path.name):
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
         if generate_thumbnail(source_path, thumb_path, filename, temp_dir):
             thumbnail_path = thumb_path
+        # Always OCR images
+        extracted_text = process_image_with_ocr(source_path)
+        return thumbnail_path, extracted_text
 
-    if can_extract_text(source_path.name):
-        extracted_text = extract_text(source_path)
-
-    # Fallback: zip-based formats
-    if thumbnail_path is None:
+    # PDF: generate thumbnail and extract text with OCR comparison
+    if is_pdf(source_path.name):
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name
-        if extract_archive_thumbnail(source_path, thumb_path, width, height):
+        if generate_thumbnail(source_path, thumb_path, filename, temp_dir):
             thumbnail_path = thumb_path
+        # Extract text with OCR quality comparison
+        extracted_text = process_pdf_with_ocr(source_path, orig_ext)
+        return thumbnail_path, extracted_text
 
-    # Fallback: OLE compound documents
+    # Text files: extract directly (no OCR needed)
+    if is_text_file(source_path.name):
+        extracted_text = extract_text_from_file(source_path)
+        return None, extracted_text
+
+    # Fallback: zip-based formats (thumbnails only)
+    thumb_name = f"{uuid.uuid4()}.png"
+    thumb_path = temp_dir / thumb_name
+    if extract_archive_thumbnail(source_path, thumb_path, width, height):
+        thumbnail_path = thumb_path
+
+    # Fallback: OLE compound documents (thumbnails only)
     if thumbnail_path is None:
         thumb_name = f"{uuid.uuid4()}.png"
         thumb_path = temp_dir / thumb_name

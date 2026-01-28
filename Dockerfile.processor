@@ -19,8 +19,9 @@ RUN pip install --no-cache-dir -r requirements.processor.txt
 COPY src/processor.py ./src/processor.py
 COPY src/process_job.py ./src/process_job.py
 COPY src/processor_settings.py ./src/processor_settings.py
+COPY src/ocr_client.py ./src/ocr_client.py
 
-RUN mkdir -p /work /dwg-exchange
+RUN mkdir -p /work /dwg-exchange /ocr-exchange
 
 ENV PYTHONUNBUFFERED=1
 

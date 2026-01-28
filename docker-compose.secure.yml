@@ -4,10 +4,12 @@
 # - Processor runs in fresh air-gapped container per job (network_mode: none)
 # - Only trusted components (fetcher, uploader) have network/credentials
 # - Orchestrator spawns containers, has no credentials
-# - QCAD also air-gapped, communicates via shared volume
+# - QCAD and OCR sidecars also air-gapped, communicate via shared volumes
 #
 # Data flow:
 # Fetcher (network) -> INPUT_QUEUE -> Orchestrator -> PROCESSOR (air-gapped) -> OUTPUT_QUEUE -> Uploader (network)
+#                                                         ↕                         
+#                                          OCR Sidecar (air-gapped, persistent)
 
 services:
   # TRUSTED: Downloads files from S3, claims jobs from DB
@@ -50,7 +52,7 @@ services:
       - PROCESSOR_IMAGE=tte-processor:latest
       - PROCESSOR_RUNTIME=${PROCESSOR_RUNTIME:-runsc}
       - PROCESSOR_TIMEOUT=${PROCESSOR_TIMEOUT:-600}
-      - PROCESSOR_MEMORY=${PROCESSOR_MEMORY:-2g}
+      - PROCESSOR_MEMORY=${PROCESSOR_MEMORY:-4g}
       - PROCESSOR_CPUS=${PROCESSOR_CPUS:-2}
       - QCAD_IMAGE=${QCAD_IMAGE:-arjankalfsbeek/qcad:latest}
       - QCAD_EPHEMERAL=${QCAD_EPHEMERAL:-true}
@@ -61,6 +63,7 @@ services:
       - OUTPUT_VOLUME=tte-queue-output
       - STATUS_VOLUME=tte-queue-status
       - DWG_EXCHANGE_VOLUME=tte-dwg-exchange
+      - OCR_EXCHANGE_VOLUME=tte-ocr-exchange
     volumes:
       - tte-queue-input:/queue/input
       - tte-queue-output:/queue/output
@@ -72,6 +75,7 @@ services:
     command: python -m src.orchestrator
     depends_on:
       - processor-build
+      - ocr-build
 
   # TRUSTED: Sanitizes and uploads results
   # Uses minimal DB role (tte_uploader) that can ONLY update specific columns
@@ -130,6 +134,36 @@ services:
       - ./src/qcad_watcher.sh:/watcher.sh:ro
     entrypoint: ["/bin/sh", "/watcher.sh"]
 
+  # UNTRUSTED (air-gapped): OCR via EasyOCR
+  # Persistent container - model loads once at startup, processes requests via file IPC
+  # Still secure: network_mode=none, can't exfiltrate data
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    image: tte-ocr:latest
+    container_name: tte-ocr
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    mem_limit: 4g
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    volumes:
+      - tte-ocr-exchange:/ocr-exchange
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+  # Build-only service: creates the OCR image
+  ocr-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    image: tte-ocr:latest
+    container_name: tte-ocr-build
+    entrypoint: ["echo", "OCR image built"]
+    restart: "no"
+
 # External volumes with explicit names (no compose project prefix)
 # These must be created before starting: docker volume create tte-queue-input etc.
 # Or use: docker compose up (compose will create them automatically as external: false)
@@ -142,6 +176,8 @@ volumes:
     name: tte-queue-status
   tte-dwg-exchange:
     name: tte-dwg-exchange
+  tte-ocr-exchange:
+    name: tte-ocr-exchange
 
 networks:
   external:

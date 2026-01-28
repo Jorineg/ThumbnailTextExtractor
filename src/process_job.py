@@ -63,7 +63,7 @@ def main():
     }
     
     try:
-        thumbnail_path, extracted_text = process_file(actual_input, work_dir, original_filename)
+        thumbnail_path, extracted_text = process_file(actual_input, work_dir, original_filename, original_extension)
         
         result["success"] = True
         if thumbnail_path and thumbnail_path.exists():

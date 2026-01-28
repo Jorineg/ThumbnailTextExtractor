@@ -1,0 +1,46 @@
+# OCR Sidecar - Persistent air-gapped container for EasyOCR processing
+# This container stays running and processes OCR requests via file-based IPC
+# Security: network_mode=none, read_only=true (except /ocr-exchange and /tmp)
+FROM python:3.11-slim
+
+# Install system dependencies for EasyOCR
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.ocr.txt .
+RUN pip install --no-cache-dir -r requirements.ocr.txt
+
+# Pre-download EasyOCR models during build (they're baked into the image)
+# This avoids network access at runtime
+RUN python -c "import easyocr; easyocr.Reader(['de', 'en'], gpu=False, download_enabled=True)"
+
+# Download wordlists for quality comparison
+# German: ~50k common words, English: ~50k common words
+RUN mkdir -p /app/wordlists && \
+    pip install wordfreq && \
+    python -c "from wordfreq import top_n_list; \
+words_de = set(top_n_list('de', 50000)); \
+words_en = set(top_n_list('en', 50000)); \
+combined = words_de | words_en; \
+open('/app/wordlists/combined.txt', 'w').write('\\n'.join(sorted(combined)))" && \
+    pip uninstall -y wordfreq regex langcodes language_data marisa-trie ftfy msgpack wcwidth
+
+# Copy watcher script
+COPY src/ocr_watcher.py ./src/ocr_watcher.py
+
+RUN mkdir -p /ocr-exchange
+
+ENV PYTHONUNBUFFERED=1
+ENV OCR_EXCHANGE_DIR=/ocr-exchange
+ENV WORDLIST_PATH=/app/wordlists/combined.txt
+
+# Run the watcher
+CMD ["python", "-m", "src.ocr_watcher"]
