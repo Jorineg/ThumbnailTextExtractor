@@ -125,6 +125,8 @@ class Fetcher:
             return None
         except Exception as e:
             logger.error(f"Failed to claim job: {e}")
+            if self.db_conn:
+                self.db_conn.rollback()
             self.db_conn = None  # Force reconnect
             return None
 
