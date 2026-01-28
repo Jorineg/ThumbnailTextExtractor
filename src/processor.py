@@ -581,32 +581,40 @@ def process_pdf_with_ocr(source_path: Path, original_extension: str) -> Optional
         logger.debug("OCR comparison failed, using embedded text")
         return embedded_text
     
-    # Decide if we should use OCR
-    use_ocr, reason = should_use_ocr(page1_embedded, ocr_result)
-    logger.info(f"OCR decision: {reason} (embedded={len(page1_embedded or '')} chars, "
-                f"ocr={ocr_result.get('char_count', 0)} chars, quality={ocr_result.get('quality', 0):.2f})")
-    
-    if not use_ocr:
-        return embedded_text
-    
-    # OCR is better - run on all pages
-    logger.info("Running OCR on all PDF pages...")
+    # Get page count
     doc = fitz.open(source_path)
     page_count = len(doc)
     doc.close()
     
-    ocr_texts = []
-    for page_num in range(page_count):
-        page_image = render_pdf_page_to_image(source_path, page_num)
-        if page_image:
-            try:
-                page_ocr = ocr_image(page_image)
-                if page_ocr and page_ocr.get("text"):
-                    ocr_texts.append(page_ocr["text"])
-            finally:
-                page_image.unlink(missing_ok=True)
+    # Decide if we should use OCR
+    use_ocr, reason = should_use_ocr(page1_embedded, ocr_result)
+    logger.info(f"OCR decision: {reason} (embedded={len(page1_embedded or '')} chars, "
+                f"ocr={ocr_result.get('char_count', 0)} chars, quality={ocr_result.get('quality', 0):.2f}, "
+                f"pages={page_count})")
     
-    full_ocr_text = "\n\n".join(ocr_texts) if ocr_texts else ""
+    if not use_ocr:
+        return embedded_text
+    
+    # OCR is better - for single-page PDFs, reuse the result we already have
+    if page_count == 1:
+        logger.info("Single-page PDF: reusing page 1 OCR result")
+        full_ocr_text = ocr_result.get("text", "")
+    else:
+        # Multi-page PDF: OCR remaining pages (page 1 already done)
+        logger.info(f"Running OCR on remaining {page_count - 1} PDF pages...")
+        ocr_texts = [ocr_result.get("text", "")]  # Start with page 1 result
+        
+        for page_num in range(1, page_count):  # Start from page 2
+            page_image = render_pdf_page_to_image(source_path, page_num)
+            if page_image:
+                try:
+                    page_ocr = ocr_image(page_image)
+                    if page_ocr and page_ocr.get("text"):
+                        ocr_texts.append(page_ocr["text"])
+                finally:
+                    page_image.unlink(missing_ok=True)
+        
+        full_ocr_text = "\n\n".join(ocr_texts) if ocr_texts else ""
     
     # Get final text (may concatenate both)
     final_text = get_final_text(embedded_text, {"text": full_ocr_text}, reason)
