@@ -31,6 +31,7 @@ STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "files")
 
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+MAX_QUEUED_JOBS = int(os.getenv("MAX_QUEUED_JOBS", "20"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 BETTERSTACK_TOKEN = os.getenv("BETTERSTACK_SOURCE_TOKEN")
 BETTERSTACK_HOST = os.getenv("BETTERSTACK_INGEST_HOST")
@@ -189,9 +190,8 @@ class Fetcher:
         logger.info(f"Poll interval: {POLL_INTERVAL}s")
 
         while self.running:
-            # Don't fetch if queue is getting too large (backpressure)
             pending = self.check_pending_jobs()
-            if pending >= 10:
+            if pending >= MAX_QUEUED_JOBS:
                 logger.debug(f"Queue has {pending} pending jobs, waiting...")
                 time.sleep(POLL_INTERVAL)
                 continue
