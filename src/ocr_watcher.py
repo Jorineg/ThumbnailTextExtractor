@@ -61,7 +61,7 @@ class OCRWatcher:
         """Load EasyOCR model (done once at startup)."""
         logger.info("Loading EasyOCR model (German + English)...")
         start = time.time()
-        self.reader = easyocr.Reader(['de', 'en'], gpu=False)
+        self.reader = easyocr.Reader(['de', 'en'], gpu=True)
         logger.info(f"Model loaded in {time.time() - start:.1f}s")
 
     def load_wordlist(self):
@@ -115,13 +115,22 @@ class OCRWatcher:
         
         return np.array(img)
 
-    def process_request(self, request_file: Path) -> bool:
-        """Process a single OCR request."""
-        job_id = request_file.stem
+    def claim_request(self, request_file: Path) -> Path | None:
+        """Atomically claim a request via rename. Returns claimed path or None."""
+        claimed = request_file.with_suffix('.processing')
+        try:
+            request_file.rename(claimed)
+            return claimed
+        except (FileNotFoundError, OSError):
+            return None
+
+    def process_request(self, claimed_file: Path) -> bool:
+        """Process a claimed OCR request."""
+        job_id = claimed_file.stem
 
         try:
             # Read request metadata
-            request_data = json.loads(request_file.read_text())
+            request_data = json.loads(claimed_file.read_text())
             image_filename = request_data.get("image_path", f"{job_id}.png")
             image_path = OCR_EXCHANGE_DIR / image_filename
 
@@ -163,16 +172,14 @@ class OCRWatcher:
             logger.info(f"OCR complete: {job_id} - {len(full_text)} chars, "
                        f"quality={quality:.2f}, conf={avg_confidence:.2f}, {elapsed:.1f}s")
 
-            # Cleanup request file (processor will cleanup image and result)
-            request_file.unlink(missing_ok=True)
+            claimed_file.unlink(missing_ok=True)
             return True
 
         except Exception as e:
             logger.error(f"OCR failed for {job_id}: {e}", exc_info=True)
-            # Write failure marker
             failed_file = OCR_EXCHANGE_DIR / f"{job_id}.failed"
             failed_file.write_text(str(e)[:500])
-            request_file.unlink(missing_ok=True)
+            claimed_file.unlink(missing_ok=True)
             return False
 
     def run(self):
@@ -189,14 +196,15 @@ class OCRWatcher:
         logger.info("Ready for OCR requests")
 
         while self.running:
-            # Find pending requests
             request_files = list(OCR_EXCHANGE_DIR.glob("*.request"))
 
             if request_files:
                 for request_file in request_files:
                     if not self.running:
                         break
-                    self.process_request(request_file)
+                    claimed = self.claim_request(request_file)
+                    if claimed:
+                        self.process_request(claimed)
             else:
                 time.sleep(0.5)
 

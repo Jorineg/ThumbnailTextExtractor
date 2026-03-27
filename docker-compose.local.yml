@@ -1,7 +1,6 @@
 services:
   thumbnail-extractor:
     build: .
-    # container_name: thumbnail-text-extractor
     restart: unless-stopped
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
@@ -27,7 +26,10 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - dwg-exchange:/dwg-exchange
+      - ./ocr-exchange:/ocr-exchange
       - /var/run/docker.sock:/var/run/docker.sock
+      - ../caddy-root-ca.crt:/caddy-root-ca.crt:ro
+    command: sh -c "cat /caddy-root-ca.crt >> $(python -c 'import certifi; print(certifi.where())') && python -m src.app"
     depends_on:
       - qcad
 
@@ -38,6 +40,23 @@ services:
     entrypoint: ["tail", "-f", "/dev/null"]
     volumes:
       - dwg-exchange:/dwg-exchange
+
+  # Optional: run OCR in Docker (CPU only, no MPS)
+  # Start with: docker compose -f docker-compose.local.yml --profile docker-ocr up
+  # Otherwise run OCR natively with MPS: ./run_ocr_native.sh
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    restart: unless-stopped
+    profiles: ["docker-ocr"]
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    volumes:
+      - ./ocr-exchange:/ocr-exchange
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_IMAGE_DIMENSION=${MAX_IMAGE_DIMENSION:-4000}
 
 volumes:
   dwg-exchange:

@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.ocr.txt
 
 # Pre-download EasyOCR models during build (they're baked into the image)
 # This avoids network access at runtime
-RUN python -c "import easyocr; easyocr.Reader(['de', 'en'], gpu=False, download_enabled=True)"
+RUN python -c "import easyocr; easyocr.Reader(['de', 'en'], gpu=True, download_enabled=True)"
 
 # Download wordlists for quality comparison
 # German: ~50k common words, English: ~50k common words
