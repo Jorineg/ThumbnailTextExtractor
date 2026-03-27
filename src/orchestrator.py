@@ -29,7 +29,7 @@ from logging.handlers import RotatingFileHandler
 
 # Configuration
 PROCESSOR_IMAGE = os.getenv("PROCESSOR_IMAGE", "thumbnail-processor:latest")
-PROCESSOR_TIMEOUT = int(os.getenv("PROCESSOR_TIMEOUT", "600"))  # 10 minutes
+PROCESSOR_TIMEOUT = int(os.getenv("PROCESSOR_TIMEOUT", "1800"))  # 30 minutes
 PROCESSOR_MEMORY = os.getenv("PROCESSOR_MEMORY", "2g")
 PROCESSOR_CPUS = float(os.getenv("PROCESSOR_CPUS", "2"))
 PROCESSOR_RUNTIME = os.getenv("PROCESSOR_RUNTIME", "runsc")  # runsc (gVisor), kata, or runc (default Docker)
@@ -246,15 +246,21 @@ done
 
             logger.info(f"Processing {meta.get('original_filename', content_hash[:8])} in container {container.short_id}")
 
+            error_reason = None
             try:
                 result = container.wait(timeout=PROCESSOR_TIMEOUT)
                 exit_code = result.get("StatusCode", -1)
                 container_logs = container.logs().decode("utf-8", errors="replace")
                 logger.debug(f"Container {container.short_id} logs:\n{container_logs}")
+                if exit_code == 137:
+                    error_reason = "container_oom_killed"
+                elif exit_code != 0:
+                    error_reason = f"container_exit_{exit_code}"
             except Exception as e:
                 logger.error(f"Container timeout/error for {content_hash[:8]}: {e}")
                 container.kill()
                 exit_code = -1
+                error_reason = f"container_timeout_{PROCESSOR_TIMEOUT}s"
 
             container.remove(force=True)
 
@@ -288,6 +294,8 @@ done
                 network_mode="none",
             )
 
+            if error_reason:
+                meta["error_reason"] = error_reason
             done_file = STATUS_DIR / f"{content_hash}.done"
             done_file.write_text(json.dumps(meta))
             return True

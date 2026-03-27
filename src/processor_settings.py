@@ -23,6 +23,9 @@ MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
 TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))
 TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))
 
+# OCR: max pages to run through OCR sidecar (embedded text used for remaining pages)
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))
+
 # Supported formats
 THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 THUMBNAIL_PDF_EXTENSIONS = {".pdf"}

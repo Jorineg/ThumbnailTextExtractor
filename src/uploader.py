@@ -251,7 +251,7 @@ class Uploader:
             self.db_conn = None
             return False
 
-    def update_db_failed(self, content_hash: str, try_count: int) -> bool:
+    def update_db_failed(self, content_hash: str, try_count: int, status_message: str | None = None) -> bool:
         """Mark job as failed in DB.
         
         The tte_uploader role can ONLY update these specific columns.
@@ -266,10 +266,11 @@ class Uploader:
                     UPDATE file_contents SET
                         processing_status = %s,
                         try_count = %s,
+                        status_message = %s,
                         last_status_change = %s,
                         db_updated_at = %s
                     WHERE content_hash = %s
-                """, (status, try_count, now, now, content_hash))
+                """, (status, try_count, status_message, now, now, content_hash))
             conn.commit()
             return True
             
@@ -285,20 +286,24 @@ class Uploader:
         result_file = OUTPUT_DIR / f"{content_hash}.result.json"
         thumb_file = OUTPUT_DIR / f"{content_hash}.thumbnail.png"
         log_file = OUTPUT_DIR / f"{content_hash}.log"
+        error_reason = meta.get("error_reason")
         
         # Forward processor logs
         self.forward_processor_logs(log_file, content_hash)
         
         if not result_file.exists():
-            logger.error(f"No result.json for {content_hash[:8]}")
-            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
+            msg = error_reason or "no_result_file"
+            logger.error(f"No result.json for {content_hash[:8]} ({msg})")
+            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1, msg)
             return
         
         result = json.loads(result_file.read_text())
         
         if not result.get("success"):
-            logger.warning(f"Processing failed for {content_hash[:8]}: {result.get('error')}")
-            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
+            proc_error = result.get("error", "unknown")
+            msg = f"processing_error: {proc_error[:200]}"
+            logger.warning(f"Processing failed for {content_hash[:8]}: {proc_error}")
+            self.update_db_failed(content_hash, meta.get("try_count", 0) + 1, msg)
             self.cleanup_output(content_hash)
             return
         
@@ -336,7 +341,8 @@ class Uploader:
     def process_failed(self, content_hash: str, error: str, meta: dict):
         """Process a failed job."""
         logger.error(f"Job failed for {content_hash[:8]}: {error}")
-        self.update_db_failed(content_hash, meta.get("try_count", 0) + 1)
+        msg = f"orchestrator_error: {error[:200]}"
+        self.update_db_failed(content_hash, meta.get("try_count", 0) + 1, msg)
         self.cleanup_output(content_hash)
 
     def cleanup_output(self, content_hash: str):

@@ -42,6 +42,7 @@ DWG_WHITE_THRESHOLD = int(os.getenv("DWG_WHITE_THRESHOLD", "250"))  # Pixel valu
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
 TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))  # 200KB max for unknown text files
 TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))  # 99% printable chars required
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
