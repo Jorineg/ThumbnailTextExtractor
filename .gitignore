@@ -11,3 +11,4 @@ __pycache__/
 *.pyzw
 *.deb
 data/
+.venv-ocr
