@@ -1,6 +1,8 @@
 """Minimal settings for air-gapped processor - NO network configuration."""
 import os
 
+from src.text_limits import max_text_length_cap
+
 # Processing directories (mounted volumes)
 WORK_DIR = "/work"
 DWG_EXCHANGE_DIR = "/dwg-exchange"
@@ -18,8 +20,8 @@ THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")
 DWG_INTERMEDIATE_DPI = int(os.getenv("DWG_INTERMEDIATE_DPI", "600"))
 DWG_WHITE_THRESHOLD = int(os.getenv("DWG_WHITE_THRESHOLD", "250"))
 
-# Text extraction limits
-MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
+# Text extraction limits (None = unlimited; set MAX_TEXT_LENGTH>0 to cap)
+MAX_TEXT_LENGTH = max_text_length_cap()
 TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))
 TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))
 

@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.trusted.txt .
 RUN pip install --no-cache-dir -r requirements.trusted.txt
 
+COPY src/text_limits.py ./src/text_limits.py
 COPY src/fetcher.py ./src/fetcher.py
 COPY src/orchestrator.py ./src/orchestrator.py
 COPY src/uploader.py ./src/uploader.py

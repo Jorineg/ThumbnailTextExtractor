@@ -36,6 +36,12 @@ PROCESSOR_RUNTIME = os.getenv("PROCESSOR_RUNTIME", "runsc")  # runsc (gVisor), k
 MAX_PARALLEL_JOBS = int(os.getenv("MAX_PARALLEL_JOBS", "1"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Injected into each processor container (aligns with processor_settings defaults)
+PROCESSOR_EXTRA_ENV = {
+    "MAX_TEXT_LENGTH": os.getenv("MAX_TEXT_LENGTH", "0"),
+    "OCR_MAX_PAGES": os.getenv("OCR_MAX_PAGES", "20"),
+}
+
 # Docker volume names (must match docker-compose volume names)
 # These are the actual Docker volume names, NOT paths inside this container
 # Using explicit names with tte- prefix to avoid compose project name issues
@@ -237,6 +243,7 @@ done
                     "/root/.cache": "size=64m,mode=0700",
                     "/root/.config": "size=64m,mode=0700",
                 },
+                "environment": PROCESSOR_EXTRA_ENV,
             }
 
             if PROCESSOR_RUNTIME and PROCESSOR_RUNTIME != "runc":

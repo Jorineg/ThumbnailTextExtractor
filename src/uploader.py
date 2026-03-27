@@ -23,6 +23,8 @@ from logtail import LogtailHandler
 import logging
 from logging.handlers import RotatingFileHandler
 
+from src.text_limits import max_text_length_cap, truncate_text
+
 # Configuration
 # DB: Minimal role that can ONLY update file_contents results
 DB_DSN = os.environ["TTE_UPLOADER_DB_DSN"]  # postgresql://tte_uploader:xxx@host:5432/db
@@ -39,7 +41,7 @@ BETTERSTACK_HOST = os.getenv("BETTERSTACK_INGEST_HOST")
 
 # Sanitization limits
 MAX_THUMBNAIL_SIZE = 1_000_000  # 1MB
-MAX_TEXT_LENGTH = 51200
+MAX_TEXT_LENGTH = max_text_length_cap()  # None = unlimited (env MAX_TEXT_LENGTH, default 0)
 ALLOWED_THUMBNAIL_DIMS = [(400, 300), (800, 600), (1000, 750)]  # Allow configured sizes
 
 QUEUE_DIR = Path("/queue")
@@ -159,9 +161,7 @@ class Uploader:
         if not text:
             return text
         
-        # Truncate
-        if len(text) > MAX_TEXT_LENGTH:
-            text = text[:MAX_TEXT_LENGTH]
+        text = truncate_text(text, MAX_TEXT_LENGTH)
         
         # Remove null bytes
         text = text.replace('\x00', '')

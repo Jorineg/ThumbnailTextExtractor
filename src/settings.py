@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.text_limits import max_text_length_cap
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOGS_DIR = BASE_DIR / "logs"
 DATA_DIR = BASE_DIR / "data"
@@ -39,7 +41,7 @@ THUMBNAIL_CROP_POSITION = os.getenv("THUMBNAIL_CROP_POSITION", "top")  # "top" o
 # DWG processing: high-res intermediate for content-aware cropping
 DWG_INTERMEDIATE_DPI = int(os.getenv("DWG_INTERMEDIATE_DPI", "600"))
 DWG_WHITE_THRESHOLD = int(os.getenv("DWG_WHITE_THRESHOLD", "250"))  # Pixel value above which is considered "white"
-MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "51200"))
+MAX_TEXT_LENGTH = max_text_length_cap()
 TEXT_FALLBACK_MAX_SIZE = int(os.getenv("TEXT_FALLBACK_MAX_SIZE", "204800"))  # 200KB max for unknown text files
 TEXT_FALLBACK_MIN_PRINTABLE = float(os.getenv("TEXT_FALLBACK_MIN_PRINTABLE", "0.99"))  # 99% printable chars required
 OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))

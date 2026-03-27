@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.processor.txt .
 RUN pip install --no-cache-dir -r requirements.processor.txt
 
+COPY src/text_limits.py ./src/text_limits.py
 COPY src/processor.py ./src/processor.py
 COPY src/process_job.py ./src/process_job.py
 COPY src/processor_settings.py ./src/processor_settings.py

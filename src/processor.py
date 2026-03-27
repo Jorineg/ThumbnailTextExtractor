@@ -29,6 +29,8 @@ try:
 except ImportError:
     from src import settings
 
+from src.text_limits import truncate_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -486,8 +488,7 @@ def extract_text_from_pdf(source_path: Path) -> Optional[str]:
         
         full_text = "\n\n".join(text_parts)
         full_text = full_text.replace('\x00', '')
-        if len(full_text) > settings.MAX_TEXT_LENGTH:
-            full_text = full_text[:settings.MAX_TEXT_LENGTH]
+        full_text = truncate_text(full_text, settings.MAX_TEXT_LENGTH)
         return full_text if full_text.strip() else None
 
     except Exception as e:
@@ -627,10 +628,8 @@ def process_pdf_with_ocr(source_path: Path, original_extension: str) -> Optional
     if embedded_tail.strip():
         parts.append(embedded_tail)
     final_text = "\n\n".join(parts)
-    
-    if len(final_text) > settings.MAX_TEXT_LENGTH:
-        final_text = final_text[:settings.MAX_TEXT_LENGTH]
-    
+    final_text = truncate_text(final_text, settings.MAX_TEXT_LENGTH)
+
     logger.info(f"OCR complete: {len(final_text)} chars ({ocr_page_count} OCR + "
                 f"{max(0, page_count - ocr_limit)} embedded pages)")
     return final_text if final_text.strip() else None
@@ -640,9 +639,7 @@ def process_image_with_ocr(source_path: Path) -> Optional[str]:
     """Run OCR on an image file."""
     ocr_result = ocr_image(source_path)
     if ocr_result and ocr_result.get("text"):
-        text = ocr_result["text"]
-        if len(text) > settings.MAX_TEXT_LENGTH:
-            text = text[:settings.MAX_TEXT_LENGTH]
+        text = truncate_text(ocr_result["text"], settings.MAX_TEXT_LENGTH)
         logger.info(f"Image OCR: {len(text)} chars, quality={ocr_result.get('quality', 0):.2f}")
         return text
     return None
@@ -650,12 +647,17 @@ def process_image_with_ocr(source_path: Path) -> Optional[str]:
 
 def extract_text_from_file(source_path: Path) -> Optional[str]:
     try:
+        cap = settings.MAX_TEXT_LENGTH
+
+        def _read_text(f) -> str:
+            return f.read() if cap is None else f.read(cap)
+
         try:
             with open(source_path, "r", encoding="utf-8") as f:
-                text = f.read(settings.MAX_TEXT_LENGTH)
+                text = _read_text(f)
         except UnicodeDecodeError:
             with open(source_path, "r", encoding="latin-1") as f:
-                text = f.read(settings.MAX_TEXT_LENGTH)
+                text = _read_text(f)
         return text if text.strip() else None
 
     except Exception as e:
@@ -677,8 +679,9 @@ def extract_text_fallback(source_path: Path) -> Optional[str]:
         if file_size > settings.TEXT_FALLBACK_MAX_SIZE:
             return None
 
+        read_n = file_size if settings.MAX_TEXT_LENGTH is None else min(file_size, settings.MAX_TEXT_LENGTH)
         with open(source_path, "rb") as f:
-            raw_data = f.read(min(file_size, settings.MAX_TEXT_LENGTH))
+            raw_data = f.read(read_n)
 
         if b'\x00' in raw_data:
             return None

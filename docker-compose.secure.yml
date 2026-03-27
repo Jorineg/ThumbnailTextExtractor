@@ -55,6 +55,8 @@ services:
       - PROCESSOR_MEMORY=${PROCESSOR_MEMORY:-4g}
       - PROCESSOR_CPUS=${PROCESSOR_CPUS:-2}
       - MAX_PARALLEL_JOBS=${MAX_PARALLEL_JOBS}
+      - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-0}
+      - OCR_MAX_PAGES=${OCR_MAX_PAGES:-20}
       - QCAD_IMAGE=${QCAD_IMAGE:-arjankalfsbeek/qcad:latest}
       - QCAD_EPHEMERAL=${QCAD_EPHEMERAL:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -97,6 +99,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - BETTERSTACK_SOURCE_TOKEN=${BETTERSTACK_SOURCE_TOKEN:-}
       - BETTERSTACK_INGEST_HOST=${BETTERSTACK_INGEST_HOST:-}
+      - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-0}
     volumes:
       - tte-queue-input:/queue/input:ro
       - tte-queue-output:/queue/output
